@@ -3,9 +3,6 @@ use utils;
 const STATE_ROWS: usize = 4;
 const STATE_COLS: usize = 4;
 type State = [[u8; STATE_COLS]; STATE_ROWS];
-fn new_state() -> State {
-    [[0u8; STATE_COLS]; STATE_ROWS]
-}
 
 const SUBSTITUTION_TABLE: [u8; 256] = utils::hex!("
     63 7c 77 7b f2 6b 6f c5 30 01 67 2b fe d7 ab 76
@@ -49,33 +46,85 @@ fn substitute_bytes(state: State) -> State {
     state.map(|arr| arr.map(|x| SUBSTITUTION_TABLE[x as usize]))
 }
 
+fn shift_rows(state: State) -> State {
+    state.iter().enumerate().map(|(i, arr)| shift_array_left(*arr, i))
+        .collect::<Vec<[u8; 4]>>()
+        .try_into()
+        .unwrap()
+}
+
+fn shift_array_left(arr: [u8; STATE_COLS], amount: usize) -> [u8; STATE_COLS] {
+    arr.iter().enumerate().map(|(i, _)| arr[(i + amount) % STATE_ROWS])
+        .collect::<Vec<u8>>()
+        .try_into()
+        .unwrap()
+}
+
+fn shift_array_right(arr: [u8; STATE_COLS], amount: usize) -> [u8; STATE_COLS] {
+    assert!(amount < STATE_COLS);
+    shift_array_left(arr, STATE_COLS - amount)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::*;
-
+    // Substituting bytes.
     #[test]
     fn substitution_table_inverts() {
         for v in 0..=255 {
-            assert_eq!(v, INVERSE_SUBSTITUTION_TABLE[SUBSTITUTION_TABLE[v as usize] as usize]);
+            assert_eq!(v, super::INVERSE_SUBSTITUTION_TABLE[super::SUBSTITUTION_TABLE[v as usize] as usize]);
         }
     }
 
     #[test]
-    fn state_substitution() {
-        let state: State = [
+    fn substitute_bytes() {
+        let state: super::State = [
             utils::hex!("00 01 02 03"),
             utils::hex!("7f 8f 9f af"),
             utils::hex!("f0 e1 d2 c3"),
             utils::hex!("0f 0e 1e 1f")
         ];
 
-        let expected: State = [
+        let expected: super::State = [
             utils::hex!("63 7c 77 7b"),
             utils::hex!("d2 73 db 79"),
             utils::hex!("8c f8 b5 2e"),
             utils::hex!("76 ab 72 c0")
         ];
 
-        assert_eq!(substitute_bytes(state), expected);
+        assert_eq!(super::substitute_bytes(state), expected);
+    }
+
+    // Shifting Rows
+    #[test]
+    fn shift_array_left() {
+        assert_eq!(super::shift_array_left([1, 2, 3, 4], 1), [2, 3, 4, 1]);
+        assert_eq!(super::shift_array_left([1, 2, 3, 4], 2), [3, 4, 1, 2]);
+        assert_eq!(super::shift_array_left([1, 2, 3, 4], 3), [4, 1, 2, 3]);
+    }
+
+    #[test]
+    fn shift_array_right() {
+        assert_eq!(super::shift_array_right([1, 2, 3, 4], 1), [4, 1, 2, 3]);
+        assert_eq!(super::shift_array_right([1, 2, 3, 4], 2), [3, 4, 1, 2]);
+        assert_eq!(super::shift_array_right([1, 2, 3, 4], 3), [2, 3, 4, 1]);
+    }
+
+    #[test]
+    fn shift_rows() {
+        let state: super::State = [
+            utils::hex!("0 1 2 3"),
+            utils::hex!("4 5 6 7"),
+            utils::hex!("8 9 a b"),
+            utils::hex!("c d e f"),
+        ];
+
+        let expected: super::State = [
+            utils::hex!("0 1 2 3"),
+            utils::hex!("5 6 7 4"),
+            utils::hex!("a b 8 9"),
+            utils::hex!("f c d e"),
+        ];
+
+        assert_eq!(super::shift_rows(state), expected);
     }
 }

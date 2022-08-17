@@ -4,6 +4,28 @@ const STATE_ROWS: usize = 4;
 const STATE_COLS: usize = 4;
 type State = [[u8; STATE_COLS]; STATE_ROWS];
 
+fn state_from_bytes(bytes: [u8; 16]) -> State {
+    let mut state: State = [[0u8; 4]; 4];
+    for i in 0..16 {
+        state[i % 4][i / 4] = bytes[i];
+    }
+
+    state
+}
+
+fn state_to_bytes(state: State) -> [u8; 16] {
+    transpose_state(state).iter().flatten().map(|x| *x).collect::<Vec<u8>>().try_into().unwrap()
+}
+
+fn transpose_state(state: State) -> State {
+    // This requires that the type `State` is a square matrix.
+    state.iter().enumerate()
+        .map(|(row, arr)| arr.iter().enumerate().map(|(col, _)| state[col][row]).collect::<Vec<u8>>().try_into().unwrap())
+        .collect::<Vec<[u8; 4]>>()
+        .try_into()
+        .unwrap()
+}
+
 const SUBSTITUTION_TABLE: [u8; 256] = utils::hex!("
     63 7c 77 7b f2 6b 6f c5 30 01 67 2b fe d7 ab 76
     ca 82 c9 7d fa 59 47 f0 ad d4 a2 af 9c a4 72 c0
@@ -42,32 +64,213 @@ const INVERSE_SUBSTITUTION_TABLE: [u8; 256] = utils::hex!("
     17 2b 04 7e ba 77 d6 26 e1 69 14 63 55 21 0c 7d"
 );
 
+const MIX_COLUMNS_MATRIX: [[u8; 4]; 4] = [
+    [2, 3, 1, 1],
+    [1, 2, 3, 1],
+    [1, 1, 2, 3],
+    [3, 1, 1, 2],
+];
+
 fn substitute_bytes(state: State) -> State {
     state.map(|arr| arr.map(|x| SUBSTITUTION_TABLE[x as usize]))
 }
 
 fn shift_rows(state: State) -> State {
-    state.iter().enumerate().map(|(i, arr)| shift_array_left(*arr, i))
+    state.iter().enumerate().map(|(i, arr)| shift_array_left(arr, i))
         .collect::<Vec<[u8; 4]>>()
         .try_into()
         .unwrap()
 }
 
-fn shift_array_left(arr: [u8; STATE_COLS], amount: usize) -> [u8; STATE_COLS] {
+fn shift_array_left(arr: &[u8; STATE_COLS], amount: usize) -> [u8; STATE_COLS] {
     arr.iter().enumerate().map(|(i, _)| arr[(i + amount) % STATE_ROWS])
         .collect::<Vec<u8>>()
         .try_into()
         .unwrap()
 }
 
-fn shift_array_right(arr: [u8; STATE_COLS], amount: usize) -> [u8; STATE_COLS] {
+fn shift_array_right(arr: &[u8; STATE_COLS], amount: usize) -> [u8; STATE_COLS] {
     assert!(amount < STATE_COLS);
     shift_array_left(arr, STATE_COLS - amount)
 }
 
+fn mix_columns(state: State) -> State {
+    transpose_state(
+        transpose_state(state).iter().map(|arr| rg_field_matrix_vector_mul(&MIX_COLUMNS_MATRIX, arr))
+            .collect::<Vec<[u8; 4]>>()
+            .try_into()
+            .unwrap()
+    )
+}
+
+// Multiply a matrix by a vector in the Rijndael Galois field.
+fn rg_field_matrix_vector_mul(matrix: &[[u8; 4]; 4], vector: &[u8; 4]) -> [u8; 4] {
+    matrix
+        .iter()
+        .map(|arr|
+            arr.iter().zip(vector.iter())
+                .map(|(x, y)| rg_field_mul(*x, *y))
+                .fold(0, |acc, x| acc ^ x)
+        )
+        .collect::<Vec<u8>>()
+        .try_into()
+        .unwrap()
+}
+
+// Multiplication within the Rijndael Galois field. This if the field
+// GF(2^8) using the irreducible polynomial x^8 + x^4 + x^3 + x + 1.
+// In binary, this polynomial is represented as {01}{00011011}, so in
+// hex it's 0x11B.
+//
+// Multiplication by 2 is performed via normal multiplication and
+// then--iff that overflows 8 bits--xor with 0x11b. Multiplication by
+// consecutive powers of two can be done in the same way. Then to get
+// the final result, xor all of the multiples of powers of 2 used to
+// form the number. For example, let 2a, 4a, 8a, 16a be the rg_field_mul
+// of `a` with 2, 4, 8, and 16 respectively; if b = 0x19 = {00011001},
+// then rg_field_mul(a, b) = 16a ^ 8a ^ a.
+fn rg_field_mul(a: u8, b: u8) -> u8 {
+    // Compute the rg_field_mul of `a` and 2^n for `n` in 0..8.
+    let mut a_pow_2 = [0u8; 8];
+    a_pow_2[0] = a;
+
+    for i in 1..8 {
+        // The mask is 0xff if the high bit of a_pow_2[i - 1] is 1,
+        // and 0x00 otherwise. This allows for conditional xor
+        // without branching.
+        // Use type i8 rather than u8 so we get arithmetic shifting
+        // instead of logical shifting (i.e., if we shift right, the
+        // bit added is 1 iff the high bit was 1).
+        let mask: u8 = ((a_pow_2[i - 1] as i8) >> 7) as u8;
+        assert!(mask == 0xff || mask == 0x00);
+
+        // Remember 0x11b represents the irreducible polynomial chosen
+        // for AES. But we only xor by it if the 9-th bit would be 1,
+        // and since we're implicitly clearing it (by only using u8),
+        // we xor by 0x1b instead of 0x11b.
+        a_pow_2[i] = (a_pow_2[i - 1] << 1) ^ ((mask & 0x1b) as u8);
+    }
+
+    // XOR the appropriate elements of `a_pow_2`. The i-th element is
+    // included in the XOR iff the i-th bit of `b` is 1.
+    // (ps. i is zero-index).
+    let mut result = 0u8;
+    let mut c = b;  // We'll shift `c` to read its bits.
+    for i in 0..8 {
+        // The mask is 0xff if the low bit of `c` is 1, and 0x00 otherwise.
+        let mask: u8 = u8::wrapping_sub(0, c & 1);
+        assert!(mask == 0xff || mask == 0x00);
+
+        result ^= mask & a_pow_2[i];
+        c >>= 1;
+    }
+
+    result
+}
+
 #[cfg(test)]
 mod tests {
-    // Substituting bytes.
+    ////////////////// Utils for testing //////////////////
+    fn state_from_bytes_string(s: &str) -> super::State {
+        fn char_to_byte(ch: char) -> u8 {
+            match ch {
+                '0'..='9' => (ch as u8) - ('0' as u8),
+                'a'..='f' => 10 + (ch as u8) - ('a' as u8),
+                'A'..='F' => 10 + (ch as u8) - ('F' as u8),
+                _ => panic!("Unknown char: {}", ch)
+            }
+        }
+
+        let single_digits: [u8; 32] = s.chars().map(|ch| char_to_byte(ch)).collect::<Vec<u8>>().try_into().unwrap();
+        let mut bytes = [0u8; 16];
+        for i in 0..16 {
+            bytes[i] = (single_digits[2 * i] << 4) | single_digits[2 * i + 1];
+        }
+
+        super::state_from_bytes(bytes)
+    }
+
+    fn state_to_bytes_string(state: super::State) -> String {
+        fn nibble_to_char(n: u8) -> char {
+            match n {
+                0..=9 => (('0' as u8) + n) as char,
+                10..=15 => (('a' as u8) + n - 10) as char,
+                _ => panic!("Invalid nibble for casting to char: {}", n)
+            }
+        }
+
+        fn byte_to_chars(b: u8) -> [char; 2] {
+            [nibble_to_char((b & 0xf0) >> 4), nibble_to_char(b & 0x0f)]
+        }
+
+        String::from_iter(
+            super::state_to_bytes(state)
+                .iter()
+                .map(|b| byte_to_chars(*b))
+                .flatten()
+                .collect::<Vec<char>>()
+        )
+    }
+
+    fn print_state(state: super::State) {
+        println!("[");
+        for r in 0..super::STATE_ROWS {
+            for c in 0..super::STATE_COLS {
+                print!("{:02x} ", state[r][c]);
+            }
+
+            println!("");
+        }
+        println!("]");
+    }
+
+    //////////////////////// Tests ////////////////////////
+    // State to bytes.
+    #[test]
+    fn state_to_bytes() {
+        let state: super::State = [
+            utils::hex!("0 1 2 3"),
+            utils::hex!("4 5 6 7"),
+            utils::hex!("8 9 a b"),
+            utils::hex!("c d e f"),
+        ];
+
+        let expected: [u8; 16] = [
+            0x0, 0x4, 0x8, 0xc,
+            0x1, 0x5, 0x9, 0xd,
+            0x2, 0x6, 0xa, 0xe,
+            0x3, 0x7, 0xb, 0xf,
+        ];
+
+        assert_eq!(super::state_to_bytes(state), expected);
+    }
+
+    #[test]
+    fn state_from_bytes() {
+        let bytes: [u8; 16] = [
+            0x0, 0x4, 0x8, 0xc,
+            0x1, 0x5, 0x9, 0xd,
+            0x2, 0x6, 0xa, 0xe,
+            0x3, 0x7, 0xb, 0xf,
+        ];
+
+        let expected: super::State = [
+            utils::hex!("0 1 2 3"),
+            utils::hex!("4 5 6 7"),
+            utils::hex!("8 9 a b"),
+            utils::hex!("c d e f"),
+        ];
+
+        assert_eq!(super::state_from_bytes(bytes), expected);
+    }
+
+    #[test]
+    fn bytes_to_state_and_back() {
+        let bytes: [u8; 16] = utils::hex!("01 9f 3a 32 a9 42 4b 1c 98 83 b3 ee 10 3a 80 73");
+        assert_eq!(super::state_to_bytes(super::state_from_bytes(bytes)), bytes);
+    }
+
+    // Substitute bytes.
     #[test]
     fn substitution_table_inverts() {
         for v in 0..=255 {
@@ -94,19 +297,19 @@ mod tests {
         assert_eq!(super::substitute_bytes(state), expected);
     }
 
-    // Shifting Rows
+    // Shift rows
     #[test]
     fn shift_array_left() {
-        assert_eq!(super::shift_array_left([1, 2, 3, 4], 1), [2, 3, 4, 1]);
-        assert_eq!(super::shift_array_left([1, 2, 3, 4], 2), [3, 4, 1, 2]);
-        assert_eq!(super::shift_array_left([1, 2, 3, 4], 3), [4, 1, 2, 3]);
+        assert_eq!(super::shift_array_left(&[1, 2, 3, 4], 1), [2, 3, 4, 1]);
+        assert_eq!(super::shift_array_left(&[1, 2, 3, 4], 2), [3, 4, 1, 2]);
+        assert_eq!(super::shift_array_left(&[1, 2, 3, 4], 3), [4, 1, 2, 3]);
     }
 
     #[test]
     fn shift_array_right() {
-        assert_eq!(super::shift_array_right([1, 2, 3, 4], 1), [4, 1, 2, 3]);
-        assert_eq!(super::shift_array_right([1, 2, 3, 4], 2), [3, 4, 1, 2]);
-        assert_eq!(super::shift_array_right([1, 2, 3, 4], 3), [2, 3, 4, 1]);
+        assert_eq!(super::shift_array_right(&[1, 2, 3, 4], 1), [4, 1, 2, 3]);
+        assert_eq!(super::shift_array_right(&[1, 2, 3, 4], 2), [3, 4, 1, 2]);
+        assert_eq!(super::shift_array_right(&[1, 2, 3, 4], 3), [2, 3, 4, 1]);
     }
 
     #[test]
@@ -126,5 +329,44 @@ mod tests {
         ];
 
         assert_eq!(super::shift_rows(state), expected);
+    }
+
+    // Mix columns
+    #[test]
+    fn transpose_state() {
+        let state: super::State = [
+            utils::hex!("0 1 2 3"),
+            utils::hex!("4 5 6 7"),
+            utils::hex!("8 9 a b"),
+            utils::hex!("c d e f"),
+        ];
+
+        let expected: super::State = [
+            utils::hex!("0 4 8 c"),
+            utils::hex!("1 5 9 d"),
+            utils::hex!("2 6 a e"),
+            utils::hex!("3 7 b f"),
+        ];
+
+        assert_eq!(super::transpose_state(state), expected);
+    }
+
+    #[test]
+    fn rg_field_mul() {
+        // This case is from the NIST standardization document for AES at
+        // https://tsapps.nist.gov/publication/get_pdf.cfm?pub_id=901427
+        // in section 4.2.1.
+        assert_eq!(super::rg_field_mul(0x57, 0x13), 0xfe);
+    }
+
+    #[test]
+    fn mix_columns() {
+        // This case is from the NIST standardization document for AES at
+        // https://tsapps.nist.gov/publication/get_pdf.cfm?pub_id=901427
+        // in Appendix C.3 round 1.
+        let state = state_from_bytes_string("6353e08c0960e104cd70b751bacad0e7");
+        let expected = state_from_bytes_string("5f72641557f5bc92f7be3b291db9f91a");
+
+        assert_eq!(super::mix_columns(state), expected);
     }
 }

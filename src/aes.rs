@@ -1,5 +1,28 @@
 use utils;
 
+// The following constants have their value because we're implementing
+// the 256 version of AES.
+const NUM_KEY_WORDS: usize = 8;  // Number of 32-bit words in the key (32 * 8 == 256).
+const NUM_ROUNDS: usize = 14;
+
+macro_rules! round_constant {
+    ($round_div_num_key_words:expr) => (
+        [0x01 << $round_div_num_key_words, 0x00, 0x00, 0x00]
+    )
+}
+
+// The value at index `i` is for round `i * NUM_KEY_WORDS`.
+const ROUND_CONSTANTS: [[u8; 4]; 8] = [
+    round_constant!(0),  // This element is invalid and should never be used.
+    round_constant!(0),
+    round_constant!(1),
+    round_constant!(2),
+    round_constant!(3),
+    round_constant!(4),
+    round_constant!(5),
+    round_constant!(6),
+];
+
 const STATE_ROWS: usize = 4;
 const STATE_COLS: usize = 4;
 type State = [[u8; STATE_COLS]; STATE_ROWS];
@@ -166,6 +189,47 @@ fn rg_field_mul(a: u8, b: u8) -> u8 {
     }
 
     result
+}
+
+fn key_expansion(key: [u8; 4 * NUM_KEY_WORDS]) -> [[u8; 4]; STATE_COLS * (NUM_ROUNDS + 1)] {
+    let mut keys = [[0u8; 4]; STATE_COLS * (NUM_ROUNDS + 1)];
+
+    for row in 0..NUM_KEY_WORDS {
+        for col in 0..4 {
+            keys[row][col] = key[4 * row + col];
+        }
+    }
+
+    for row in NUM_KEY_WORDS..(STATE_COLS * (NUM_ROUNDS + 1)) {
+        let mut temp: [u8; 4] = keys[row - 1];
+
+        match row % NUM_KEY_WORDS {
+            0 => {
+                temp = shift_array_left(&temp, 1)
+                    .iter()
+                    .map(|x| SUBSTITUTION_TABLE[*x as usize])
+                    .zip(ROUND_CONSTANTS[row / NUM_KEY_WORDS].iter())
+                    .map(|(x, y)| x ^ y)
+                    .collect::<Vec<u8>>()
+                    .try_into()
+                    .unwrap();
+            },
+            4 => {
+                temp = temp.iter().map(|x| SUBSTITUTION_TABLE[*x as usize])
+                    .collect::<Vec<u8>>()
+                    .try_into()
+                    .unwrap();
+            }
+            _ => ()
+        }
+
+        keys[row] = temp.iter().zip(keys[row - NUM_KEY_WORDS].iter()).map(|(x, y)| x ^ y)
+            .collect::<Vec<u8>>()
+            .try_into()
+            .unwrap();
+    }
+
+    keys
 }
 
 #[cfg(test)]
@@ -368,5 +432,24 @@ mod tests {
         let expected = state_from_bytes_string("5f72641557f5bc92f7be3b291db9f91a");
 
         assert_eq!(super::mix_columns(state), expected);
+    }
+
+    // Key expansion
+    #[test]
+    fn key_expansion() {
+        // This case is from the NIST standardization document for AES at
+        // https://tsapps.nist.gov/publication/get_pdf.cfm?pub_id=901427
+        // in Appendix A.3.
+        let key: [u8; 4 * super::NUM_KEY_WORDS] = utils::hex!("
+            60 3d eb 10 15 ca 71 be 2b 73 ae f0 85 7d 77 81
+            1f 35 2c 07 3b 61 08 d7 2d 98 10 a3 09 14 df f4
+        ");
+
+        let keys: [[u8; 4]; super::STATE_COLS * (super::NUM_ROUNDS + 1)] = super::key_expansion(key);
+
+        assert_eq!(keys[0], utils::hex!("60 3d eb 10"));   // Copied from the input key.
+        assert_eq!(keys[8], utils::hex!("9b a3 54 11"));   // First key part that's not copied from the input.
+        assert_eq!(keys[41], utils::hex!("6c cc 5a 71"));  // Some key part in the middle.
+        assert_eq!(keys[59], utils::hex!("70 6c 63 1e"));  // Last part of the last key.
     }
 }

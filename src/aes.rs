@@ -25,29 +25,9 @@ const ROUND_CONSTANTS: [[u8; 4]; 8] = [
 
 const STATE_ROWS: usize = 4;
 const STATE_COLS: usize = 4;
+const BLOCK_SIZE: usize = STATE_ROWS * STATE_COLS;
 type State = [[u8; STATE_COLS]; STATE_ROWS];
-
-fn state_from_bytes(bytes: [u8; 16]) -> State {
-    let mut state: State = [[0u8; 4]; 4];
-    for i in 0..16 {
-        state[i % 4][i / 4] = bytes[i];
-    }
-
-    state
-}
-
-fn state_to_bytes(state: State) -> [u8; 16] {
-    transpose_state(state).iter().flatten().map(|x| *x).collect::<Vec<u8>>().try_into().unwrap()
-}
-
-fn transpose_state(state: State) -> State {
-    // This requires that the type `State` is a square matrix.
-    state.iter().enumerate()
-        .map(|(row, arr)| arr.iter().enumerate().map(|(col, _)| state[col][row]).collect::<Vec<u8>>().try_into().unwrap())
-        .collect::<Vec<[u8; 4]>>()
-        .try_into()
-        .unwrap()
-}
+type Block = [u8; BLOCK_SIZE];
 
 const SUBSTITUTION_TABLE: [u8; 256] = utils::hex!("
     63 7c 77 7b f2 6b 6f c5 30 01 67 2b fe d7 ab 76
@@ -93,6 +73,52 @@ const MIX_COLUMNS_MATRIX: [[u8; 4]; 4] = [
     [1, 1, 2, 3],
     [3, 1, 1, 2],
 ];
+
+fn encrypt_block(data: Block, key: [u8; 4 * NUM_KEY_WORDS]) -> Block {
+    let round_keys = get_round_keys(key);
+    let mut state = state_from_bytes(data);
+
+    // First add the round key for round 0.
+    state = add_round_key(state, round_keys[0]);
+
+    // Each round is identical except the last. The last round is
+    // `NUM_ROUNDS` (i.e., it's inclusive).
+    for i in 1..NUM_ROUNDS {
+        state = substitute_bytes(state);
+        state = shift_rows(state);
+        state = mix_columns(state);
+        state = add_round_key(state, round_keys[i]);
+    }
+
+    // In the last round, the mix columns step is omitted.
+    state = substitute_bytes(state);
+    state = shift_rows(state);
+    state = add_round_key(state, round_keys[NUM_ROUNDS]);
+
+    state_to_bytes(state)
+}
+
+fn state_from_bytes(bytes: Block) -> State {
+    let mut state: State = [[0u8; 4]; 4];
+    for i in 0..16 {
+        state[i % 4][i / 4] = bytes[i];
+    }
+
+    state
+}
+
+fn state_to_bytes(state: State) -> Block {
+    transpose_state(state).iter().flatten().map(|x| *x).collect::<Vec<u8>>().try_into().unwrap()
+}
+
+fn transpose_state(state: State) -> State {
+    // This requires that the type `State` is a square matrix.
+    state.iter().enumerate()
+        .map(|(row, arr)| arr.iter().enumerate().map(|(col, _)| state[col][row]).collect::<Vec<u8>>().try_into().unwrap())
+        .collect::<Vec<[u8; 4]>>()
+        .try_into()
+        .unwrap()
+}
 
 fn substitute_bytes(state: State) -> State {
     state.map(|arr| arr.map(|x| SUBSTITUTION_TABLE[x as usize]))
@@ -230,6 +256,17 @@ fn key_expansion(key: [u8; 4 * NUM_KEY_WORDS]) -> [[u8; 4]; STATE_COLS * (NUM_RO
     }
 
     keys
+}
+
+fn get_round_keys(key: [u8; 4 * NUM_KEY_WORDS]) -> [[[u8; 4]; STATE_COLS]; NUM_ROUNDS + 1] {
+    let keys = key_expansion(key);
+
+    let mut round_keys = [[[0u8; 4]; STATE_COLS]; NUM_ROUNDS + 1];
+    for round in 0..(NUM_ROUNDS + 1) {
+        round_keys[round] = keys[(STATE_COLS * round)..(STATE_COLS * (round + 1))].try_into().unwrap();
+    }
+
+    round_keys
 }
 
 // Add column `i` of `state` with row `i` of the round key.
@@ -497,14 +534,28 @@ mod tests {
             10 11 12 13 14 15 16 17 18 19 1a 1b 1c 1d 1e 1f
         ");
 
-        let keys: [[u8; 4]; super::STATE_COLS * (super::NUM_ROUNDS + 1)] = super::key_expansion(key);
         let round = 11;
-        let round_key: [[u8; 4]; 4] = keys[(super::STATE_COLS * round)..(super::STATE_COLS * (round + 1))]
-            .try_into().unwrap();
-
+        let round_key = super::get_round_keys(key)[round];
         let state = state_from_bytes_string("af8690415d6e1dd387e5fbedd5c89013");
         let expected = state_from_bytes_string("5f9c6abfbac634aa50409fa766677653");
 
         assert_eq!(super::add_round_key(state, round_key), expected);
+    }
+
+    // Encrypt block
+    #[test]
+    fn encrypt_block() {
+        // This case is from the NIST standardization document for AES at
+        // https://tsapps.nist.gov/publication/get_pdf.cfm?pub_id=901427
+        // in Appendix C.3.
+        let data: super::Block = utils::hex!("00 11 22 33 44 55 66 77 88 99 aa bb cc dd ee ff");
+        let key: [u8; 4 * super::NUM_KEY_WORDS] = utils::hex!("
+            00 01 02 03 04 05 06 07 08 09 0a 0b 0c 0d 0e 0f
+            10 11 12 13 14 15 16 17 18 19 1a 1b 1c 1d 1e 1f
+        ");
+
+        let expected: super::Block = utils::hex!("8e a2 b7 ca 51 67 45 bf ea fc 49 90 4b 49 60 89");
+
+        assert_eq!(super::encrypt_block(data, key), expected);
     }
 }

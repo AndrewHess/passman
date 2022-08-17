@@ -232,6 +232,21 @@ fn key_expansion(key: [u8; 4 * NUM_KEY_WORDS]) -> [[u8; 4]; STATE_COLS * (NUM_RO
     keys
 }
 
+// Add column `i` of `state` with row `i` of the round key.
+// We're doing arithmetic in GF(2^8), so addition is done by xor.
+fn add_round_key(state: State, round_key: [[u8; 4]; 4]) -> State {
+    transpose_state(
+        transpose_state(state).iter()
+            .zip(round_key.iter())
+            .map(|(state_col, key_arr)| state_col.iter().zip(key_arr.iter()).map(|(s, k)| s ^ k)
+                    .collect::<Vec<u8>>().try_into().unwrap()
+            )
+            .collect::<Vec<[u8; 4]>>()
+            .try_into()
+            .unwrap()
+    )
+}
+
 #[cfg(test)]
 mod tests {
     ////////////////// Utils for testing //////////////////
@@ -451,5 +466,45 @@ mod tests {
         assert_eq!(keys[8], utils::hex!("9b a3 54 11"));   // First key part that's not copied from the input.
         assert_eq!(keys[41], utils::hex!("6c cc 5a 71"));  // Some key part in the middle.
         assert_eq!(keys[59], utils::hex!("70 6c 63 1e"));  // Last part of the last key.
+    }
+
+    // Add round key
+    #[test]
+    fn add_static_round_key() {
+        // This case is from the NIST standardization document for AES at
+        // https://tsapps.nist.gov/publication/get_pdf.cfm?pub_id=901427
+        // in Appendix C.3, going from round 4 to round 5.
+        let round_key: [[u8; 4]; 4] = [
+            utils::hex!("ae 87 df f0"),
+            utils::hex!("0f f1 1b 68"),
+            utils::hex!("a6 8e d5 fb"),
+            utils::hex!("03 fc 15 67"),
+        ];
+
+        let state = state_from_bytes_string("b2822d81abe6fb275faf103a078c0033");
+        let expected = state_from_bytes_string("1c05f271a417e04ff921c5c104701554");
+
+        assert_eq!(super::add_round_key(state, round_key), expected);
+    }
+
+    #[test]
+    fn add_generated_round_key() {
+        // This case is from the NIST standardization document for AES at
+        // https://tsapps.nist.gov/publication/get_pdf.cfm?pub_id=901427
+        // in Appendix C.3, going from round 11 to round 12.
+        let key: [u8; 4 * super::NUM_KEY_WORDS] = utils::hex!("
+            00 01 02 03 04 05 06 07 08 09 0a 0b 0c 0d 0e 0f
+            10 11 12 13 14 15 16 17 18 19 1a 1b 1c 1d 1e 1f
+        ");
+
+        let keys: [[u8; 4]; super::STATE_COLS * (super::NUM_ROUNDS + 1)] = super::key_expansion(key);
+        let round = 11;
+        let round_key: [[u8; 4]; 4] = keys[(super::STATE_COLS * round)..(super::STATE_COLS * (round + 1))]
+            .try_into().unwrap();
+
+        let state = state_from_bytes_string("af8690415d6e1dd387e5fbedd5c89013");
+        let expected = state_from_bytes_string("5f9c6abfbac634aa50409fa766677653");
+
+        assert_eq!(super::add_round_key(state, round_key), expected);
     }
 }

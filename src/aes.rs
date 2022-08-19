@@ -28,6 +28,8 @@ const STATE_COLS: usize = 4;
 const BLOCK_SIZE: usize = STATE_ROWS * STATE_COLS;
 type State = [[u8; STATE_COLS]; STATE_ROWS];
 type Block = [u8; BLOCK_SIZE];
+pub type MainKey = [u8; 32];
+type RoundKey = [[u8; 4]; STATE_COLS];
 
 const SUBSTITUTION_TABLE: [u8; 256] = utils::hex!("
     63 7c 77 7b f2 6b 6f c5 30 01 67 2b fe d7 ab 76
@@ -74,12 +76,42 @@ const MIX_COLUMNS_MATRIX: [[u8; 4]; 4] = [
     [3, 1, 1, 2],
 ];
 
-fn encrypt_block(data: Block, key: [u8; 4 * NUM_KEY_WORDS]) -> Block {
+// Use AES-256 to encrypt `bytes` with some padding appended so that the total
+// number of encrypted bytes is a multiple of BLOCK_SIZE. To make decrypting a
+// little easier to return only the input bytes, (that is, with no padding),
+// there will always be at least one byte of padding, and all of the padding
+// bytes will have the same value: the number of padding bytes. For example, if
+// there are 5 bytes of padding, they will all have the value 0x05.
+// This padding scheme is known as PKCS#7.
+pub fn encrypt(bytes: &[u8], key: &MainKey) -> Vec<u8> {
+    let mut result = Vec::new();
+    let mut offset = 0;
     let round_keys = get_round_keys(key);
+
+    while bytes.len() - offset >= BLOCK_SIZE {
+        // We have a full block's worth of data.
+        let block: Block = bytes[offset..(offset + BLOCK_SIZE)].try_into().unwrap();
+        result.extend_from_slice(&encrypt_block(block, &round_keys));
+
+        offset += BLOCK_SIZE;
+    }
+
+    // Encrypt the last block. We always have padding bytes, so if therre's
+    // nothing left in `bytes`, this whole block will be padding. The value of
+    // the padding bytes is the number of padding bytes.
+    let remaining_bytes = bytes.len() - offset;
+    let mut block = [(BLOCK_SIZE - remaining_bytes) as u8; BLOCK_SIZE];
+    block[..remaining_bytes].clone_from_slice(&bytes[offset..]);
+    result.extend_from_slice(&encrypt_block(block, &round_keys));
+
+    result
+}
+
+fn encrypt_block(data: Block, round_keys: &[RoundKey; (NUM_ROUNDS + 1)]) -> Block {
     let mut state = state_from_bytes(data);
 
     // First add the round key for round 0.
-    state = add_round_key(state, round_keys[0]);
+    state = add_round_key(state, &round_keys[0]);
 
     // Each round is identical except the last. The last round is
     // `NUM_ROUNDS` (i.e., it's inclusive).
@@ -87,13 +119,13 @@ fn encrypt_block(data: Block, key: [u8; 4 * NUM_KEY_WORDS]) -> Block {
         state = substitute_bytes(state);
         state = shift_rows(state);
         state = mix_columns(state);
-        state = add_round_key(state, round_keys[i]);
+        state = add_round_key(state, &round_keys[i]);
     }
 
     // In the last round, the mix columns step is omitted.
     state = substitute_bytes(state);
     state = shift_rows(state);
-    state = add_round_key(state, round_keys[NUM_ROUNDS]);
+    state = add_round_key(state, &round_keys[NUM_ROUNDS]);
 
     state_to_bytes(state)
 }
@@ -217,7 +249,7 @@ fn rg_field_mul(a: u8, b: u8) -> u8 {
     result
 }
 
-fn key_expansion(key: [u8; 4 * NUM_KEY_WORDS]) -> [[u8; 4]; STATE_COLS * (NUM_ROUNDS + 1)] {
+fn key_expansion(key: &MainKey) -> [[u8; 4]; STATE_COLS * (NUM_ROUNDS + 1)] {
     let mut keys = [[0u8; 4]; STATE_COLS * (NUM_ROUNDS + 1)];
 
     for row in 0..NUM_KEY_WORDS {
@@ -258,7 +290,7 @@ fn key_expansion(key: [u8; 4 * NUM_KEY_WORDS]) -> [[u8; 4]; STATE_COLS * (NUM_RO
     keys
 }
 
-fn get_round_keys(key: [u8; 4 * NUM_KEY_WORDS]) -> [[[u8; 4]; STATE_COLS]; NUM_ROUNDS + 1] {
+fn get_round_keys(key: &MainKey) -> [RoundKey; NUM_ROUNDS + 1] {
     let keys = key_expansion(key);
 
     let mut round_keys = [[[0u8; 4]; STATE_COLS]; NUM_ROUNDS + 1];
@@ -271,7 +303,7 @@ fn get_round_keys(key: [u8; 4 * NUM_KEY_WORDS]) -> [[[u8; 4]; STATE_COLS]; NUM_R
 
 // Add column `i` of `state` with row `i` of the round key.
 // We're doing arithmetic in GF(2^8), so addition is done by xor.
-fn add_round_key(state: State, round_key: [[u8; 4]; 4]) -> State {
+fn add_round_key(state: State, round_key: &RoundKey) -> State {
     transpose_state(
         transpose_state(state).iter()
             .zip(round_key.iter())
@@ -492,12 +524,12 @@ mod tests {
         // This case is from the NIST standardization document for AES at
         // https://tsapps.nist.gov/publication/get_pdf.cfm?pub_id=901427
         // in Appendix A.3.
-        let key: [u8; 4 * super::NUM_KEY_WORDS] = utils::hex!("
+        let key: super::MainKey = utils::hex!("
             60 3d eb 10 15 ca 71 be 2b 73 ae f0 85 7d 77 81
             1f 35 2c 07 3b 61 08 d7 2d 98 10 a3 09 14 df f4
         ");
 
-        let keys: [[u8; 4]; super::STATE_COLS * (super::NUM_ROUNDS + 1)] = super::key_expansion(key);
+        let keys: [[u8; 4]; super::STATE_COLS * (super::NUM_ROUNDS + 1)] = super::key_expansion(&key);
 
         assert_eq!(keys[0], utils::hex!("60 3d eb 10"));   // Copied from the input key.
         assert_eq!(keys[8], utils::hex!("9b a3 54 11"));   // First key part that's not copied from the input.
@@ -511,7 +543,7 @@ mod tests {
         // This case is from the NIST standardization document for AES at
         // https://tsapps.nist.gov/publication/get_pdf.cfm?pub_id=901427
         // in Appendix C.3, going from round 4 to round 5.
-        let round_key: [[u8; 4]; 4] = [
+        let round_key: super::RoundKey = [
             utils::hex!("ae 87 df f0"),
             utils::hex!("0f f1 1b 68"),
             utils::hex!("a6 8e d5 fb"),
@@ -521,7 +553,7 @@ mod tests {
         let state = state_from_bytes_string("b2822d81abe6fb275faf103a078c0033");
         let expected = state_from_bytes_string("1c05f271a417e04ff921c5c104701554");
 
-        assert_eq!(super::add_round_key(state, round_key), expected);
+        assert_eq!(super::add_round_key(state, &round_key), expected);
     }
 
     #[test]
@@ -529,17 +561,17 @@ mod tests {
         // This case is from the NIST standardization document for AES at
         // https://tsapps.nist.gov/publication/get_pdf.cfm?pub_id=901427
         // in Appendix C.3, going from round 11 to round 12.
-        let key: [u8; 4 * super::NUM_KEY_WORDS] = utils::hex!("
+        let key: super::MainKey = utils::hex!("
             00 01 02 03 04 05 06 07 08 09 0a 0b 0c 0d 0e 0f
             10 11 12 13 14 15 16 17 18 19 1a 1b 1c 1d 1e 1f
         ");
 
         let round = 11;
-        let round_key = super::get_round_keys(key)[round];
+        let round_key = super::get_round_keys(&key)[round];
         let state = state_from_bytes_string("af8690415d6e1dd387e5fbedd5c89013");
         let expected = state_from_bytes_string("5f9c6abfbac634aa50409fa766677653");
 
-        assert_eq!(super::add_round_key(state, round_key), expected);
+        assert_eq!(super::add_round_key(state, &round_key), expected);
     }
 
     // Encrypt block
@@ -549,13 +581,49 @@ mod tests {
         // https://tsapps.nist.gov/publication/get_pdf.cfm?pub_id=901427
         // in Appendix C.3.
         let data: super::Block = utils::hex!("00 11 22 33 44 55 66 77 88 99 aa bb cc dd ee ff");
-        let key: [u8; 4 * super::NUM_KEY_WORDS] = utils::hex!("
+        let key: super::MainKey = utils::hex!("
             00 01 02 03 04 05 06 07 08 09 0a 0b 0c 0d 0e 0f
             10 11 12 13 14 15 16 17 18 19 1a 1b 1c 1d 1e 1f
         ");
+        let round_keys = super::get_round_keys(&key);
 
         let expected: super::Block = utils::hex!("8e a2 b7 ca 51 67 45 bf ea fc 49 90 4b 49 60 89");
 
-        assert_eq!(super::encrypt_block(data, key), expected);
+        assert_eq!(super::encrypt_block(data, &round_keys), expected);
+    }
+
+    // Full encryption
+    // The expected results in this section come from an online AES-256
+    // implementation:
+    // https://www.devglan.com/online-tools/aes-encryption-decryption
+    // Notably, when using a different AES-256 implementation for comparison,
+    // make sure it's using the same padding scheme we do, which is called
+    // PKCS#7.
+    #[test]
+    fn encrypt_flush_block() {
+        let bytes: [u8; super::BLOCK_SIZE] = "Oh hello, World!".as_bytes().try_into().unwrap();
+        let key: super::MainKey = "keep it secret, keep it safe....".as_bytes().try_into().unwrap();
+        let expected = utils::hex!("
+            07 83 2F AE 09 F6 46 83 BE C7 55 6F 23 E8 48 8E
+            C6 70 E4 9B 52 C7 DB 77 21 DA B7 A9 78 17 7C 81
+        ");
+
+        assert_eq!(super::encrypt(&bytes, &key), expected);
+    }
+
+    #[test]
+    fn encrypt_jagged_block() {
+        let bytes: [u8; 3 * super::BLOCK_SIZE + 14] =
+            "I do not like them Sam-I-Am. I do not like green eggs and ham."
+                .as_bytes().try_into().unwrap();
+        let key: super::MainKey = "keep it secret, keep it safe....".as_bytes().try_into().unwrap();
+        let expected = utils::hex!("
+            3D C3 76 57 A6 D1 FD E3 20 32 06 3A F4 66 9A B5
+            F6 9D C8 1B DD 94 35 A3 7E C9 63 E3 E2 29 90 5B
+            45 F5 AF 20 F7 86 00 72 EA 64 54 26 77 EE A7 29
+            B7 43 DC 1C 19 0D 86 28 9F A1 B5 F2 94 74 EF B7
+        ");
+
+        assert_eq!(super::encrypt(&bytes, &key), expected);
     }
 }

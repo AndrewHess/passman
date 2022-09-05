@@ -2,18 +2,18 @@ use utils;
 
 // The following constants have their value because we're implementing
 // the 256 version of AES.
-const NUM_KEY_WORDS: usize = 8;  // Number of 32-bit words in the key (32 * 8 == 256).
+const NUM_KEY_WORDS: usize = 8; // Number of 32-bit words in the key (32 * 8 == 256).
 const NUM_ROUNDS: usize = 14;
 
 macro_rules! round_constant {
-    ($round_div_num_key_words:expr) => (
+    ($round_div_num_key_words:expr) => {
         [0x01 << $round_div_num_key_words, 0x00, 0x00, 0x00]
-    )
+    };
 }
 
 // The value at index `i` is for round `i * NUM_KEY_WORDS`.
 const ROUND_CONSTANTS: [[u8; 4]; 8] = [
-    round_constant!(0),  // This element is invalid and should never be used.
+    round_constant!(0), // This element is invalid and should never be used.
     round_constant!(0),
     round_constant!(1),
     round_constant!(2),
@@ -31,7 +31,8 @@ type Block = [u8; BLOCK_SIZE];
 pub type MainKey = [u8; 32];
 type RoundKey = [[u8; 4]; STATE_COLS];
 
-const SUBSTITUTION_TABLE: [u8; 256] = utils::hex!("
+const SUBSTITUTION_TABLE: [u8; 256] = utils::hex!(
+    "
     63 7c 77 7b f2 6b 6f c5 30 01 67 2b fe d7 ab 76
     ca 82 c9 7d fa 59 47 f0 ad d4 a2 af 9c a4 72 c0
     b7 fd 93 26 36 3f f7 cc 34 a5 e5 f1 71 d8 31 15
@@ -50,7 +51,8 @@ const SUBSTITUTION_TABLE: [u8; 256] = utils::hex!("
     8c a1 89 0d bf e6 42 68 41 99 2d 0f b0 54 bb 16"
 );
 
-const INVERSE_SUBSTITUTION_TABLE: [u8; 256] = utils::hex!("
+const INVERSE_SUBSTITUTION_TABLE: [u8; 256] = utils::hex!(
+    "
     52 09 6a d5 30 36 a5 38 bf 40 a3 9e 81 f3 d7 fb
     7c e3 39 82 9b 2f ff 87 34 8e 43 44 c4 de e9 cb
     54 7b 94 32 a6 c2 23 3d ee 4c 95 0b 42 fa c3 4e
@@ -70,10 +72,10 @@ const INVERSE_SUBSTITUTION_TABLE: [u8; 256] = utils::hex!("
 );
 
 const MIX_COLUMNS_MATRIX: [[u8; 4]; 4] = [
-    [2, 3, 1, 1],
-    [1, 2, 3, 1],
-    [1, 1, 2, 3],
-    [3, 1, 1, 2],
+    utils::hex!("2 3 1 1"),
+    utils::hex!("1 2 3 1"),
+    utils::hex!("1 1 2 3"),
+    utils::hex!("3 1 1 2"),
 ];
 
 const INVERSE_MIX_COLUMNS_MATRIX: [[u8; 4]; 4] = [
@@ -125,9 +127,12 @@ pub fn decrypt(bytes: &[u8], key: &MainKey) -> Result<Vec<u8>, String> {
     match bytes.len() {
         0 => return Err("No bytes were provided to decrypt".to_string()),
         x if x % BLOCK_SIZE != 0 => {
-            return Err(format!("The number of bytes to decrypt must be a multiple of {}", BLOCK_SIZE))
-        },
-        _ => ()
+            return Err(format!(
+                "The number of bytes to decrypt must be a multiple of {}",
+                BLOCK_SIZE
+            ))
+        }
+        _ => (),
     }
 
     let mut result = Vec::new();
@@ -205,13 +210,28 @@ fn state_from_bytes(bytes: Block) -> State {
 }
 
 fn state_to_bytes(state: State) -> Block {
-    transpose_state(state).iter().flatten().map(|x| *x).collect::<Vec<u8>>().try_into().unwrap()
+    transpose_state(state)
+        .iter()
+        .flatten()
+        .map(|x| *x)
+        .collect::<Vec<u8>>()
+        .try_into()
+        .unwrap()
 }
 
 fn transpose_state(state: State) -> State {
     // This requires that the type `State` is a square matrix.
-    state.iter().enumerate()
-        .map(|(row, arr)| arr.iter().enumerate().map(|(col, _)| state[col][row]).collect::<Vec<u8>>().try_into().unwrap())
+    state
+        .iter()
+        .enumerate()
+        .map(|(row, arr)| {
+            arr.iter()
+                .enumerate()
+                .map(|(col, _)| state[col][row])
+                .collect::<Vec<u8>>()
+                .try_into()
+                .unwrap()
+        })
         .collect::<Vec<[u8; 4]>>()
         .try_into()
         .unwrap()
@@ -226,21 +246,29 @@ fn inverse_substitute_bytes(state: State) -> State {
 }
 
 fn shift_rows(state: State) -> State {
-    state.iter().enumerate().map(|(i, arr)| shift_array_left(arr, i))
+    state
+        .iter()
+        .enumerate()
+        .map(|(i, arr)| shift_array_left(arr, i))
         .collect::<Vec<[u8; 4]>>()
         .try_into()
         .unwrap()
 }
 
 fn inverse_shift_rows(state: State) -> State {
-    state.iter().enumerate().map(|(i, arr)| shift_array_right(arr, i))
+    state
+        .iter()
+        .enumerate()
+        .map(|(i, arr)| shift_array_right(arr, i))
         .collect::<Vec<[u8; 4]>>()
         .try_into()
         .unwrap()
 }
 
 fn shift_array_left(arr: &[u8; STATE_COLS], amount: usize) -> [u8; STATE_COLS] {
-    arr.iter().enumerate().map(|(i, _)| arr[(i + amount) % STATE_ROWS])
+    arr.iter()
+        .enumerate()
+        .map(|(i, _)| arr[(i + amount) % STATE_ROWS])
         .collect::<Vec<u8>>()
         .try_into()
         .unwrap()
@@ -253,19 +281,23 @@ fn shift_array_right(arr: &[u8; STATE_COLS], amount: usize) -> [u8; STATE_COLS] 
 
 fn mix_columns(state: State) -> State {
     transpose_state(
-        transpose_state(state).iter().map(|arr| rg_field_matrix_vector_mul(&MIX_COLUMNS_MATRIX, arr))
+        transpose_state(state)
+            .iter()
+            .map(|arr| rg_field_matrix_vector_mul(&MIX_COLUMNS_MATRIX, arr))
             .collect::<Vec<[u8; 4]>>()
             .try_into()
-            .unwrap()
+            .unwrap(),
     )
 }
 
 fn inverse_mix_columns(state: State) -> State {
     transpose_state(
-        transpose_state(state).iter().map(|arr| rg_field_matrix_vector_mul(&INVERSE_MIX_COLUMNS_MATRIX, arr))
+        transpose_state(state)
+            .iter()
+            .map(|arr| rg_field_matrix_vector_mul(&INVERSE_MIX_COLUMNS_MATRIX, arr))
             .collect::<Vec<[u8; 4]>>()
             .try_into()
-            .unwrap()
+            .unwrap(),
     )
 }
 
@@ -273,11 +305,12 @@ fn inverse_mix_columns(state: State) -> State {
 fn rg_field_matrix_vector_mul(matrix: &[[u8; 4]; 4], vector: &[u8; 4]) -> [u8; 4] {
     matrix
         .iter()
-        .map(|arr|
-            arr.iter().zip(vector.iter())
+        .map(|arr| {
+            arr.iter()
+                .zip(vector.iter())
                 .map(|(x, y)| rg_field_mul(*x, *y))
                 .fold(0, |acc, x| acc ^ x)
-        )
+        })
         .collect::<Vec<u8>>()
         .try_into()
         .unwrap()
@@ -321,7 +354,7 @@ fn rg_field_mul(a: u8, b: u8) -> u8 {
     // included in the XOR iff the i-th bit of `b` is 1.
     // (ps. i is zero-index).
     let mut result = 0u8;
-    let mut c = b;  // We'll shift `c` to read its bits.
+    let mut c = b; // We'll shift `c` to read its bits.
     for i in 0..8 {
         // The mask is 0xff if the low bit of `c` is 1, and 0x00 otherwise.
         let mask: u8 = u8::wrapping_sub(0, c & 1);
@@ -356,17 +389,22 @@ fn key_expansion(key: &MainKey) -> [[u8; 4]; STATE_COLS * (NUM_ROUNDS + 1)] {
                     .collect::<Vec<u8>>()
                     .try_into()
                     .unwrap();
-            },
+            }
             4 => {
-                temp = temp.iter().map(|x| SUBSTITUTION_TABLE[*x as usize])
+                temp = temp
+                    .iter()
+                    .map(|x| SUBSTITUTION_TABLE[*x as usize])
                     .collect::<Vec<u8>>()
                     .try_into()
                     .unwrap();
             }
-            _ => ()
+            _ => (),
         }
 
-        keys[row] = temp.iter().zip(keys[row - NUM_KEY_WORDS].iter()).map(|(x, y)| x ^ y)
+        keys[row] = temp
+            .iter()
+            .zip(keys[row - NUM_KEY_WORDS].iter())
+            .map(|(x, y)| x ^ y)
             .collect::<Vec<u8>>()
             .try_into()
             .unwrap();
@@ -380,7 +418,9 @@ fn get_round_keys(key: &MainKey) -> [RoundKey; NUM_ROUNDS + 1] {
 
     let mut round_keys = [[[0u8; 4]; STATE_COLS]; NUM_ROUNDS + 1];
     for round in 0..(NUM_ROUNDS + 1) {
-        round_keys[round] = keys[(STATE_COLS * round)..(STATE_COLS * (round + 1))].try_into().unwrap();
+        round_keys[round] = keys[(STATE_COLS * round)..(STATE_COLS * (round + 1))]
+            .try_into()
+            .unwrap();
     }
 
     round_keys
@@ -390,14 +430,21 @@ fn get_round_keys(key: &MainKey) -> [RoundKey; NUM_ROUNDS + 1] {
 // We're doing arithmetic in GF(2^8), so addition is done by xor.
 fn add_round_key(state: State, round_key: &RoundKey) -> State {
     transpose_state(
-        transpose_state(state).iter()
+        transpose_state(state)
+            .iter()
             .zip(round_key.iter())
-            .map(|(state_col, key_arr)| state_col.iter().zip(key_arr.iter()).map(|(s, k)| s ^ k)
-                    .collect::<Vec<u8>>().try_into().unwrap()
-            )
+            .map(|(state_col, key_arr)| {
+                state_col
+                    .iter()
+                    .zip(key_arr.iter())
+                    .map(|(s, k)| s ^ k)
+                    .collect::<Vec<u8>>()
+                    .try_into()
+                    .unwrap()
+            })
             .collect::<Vec<[u8; 4]>>()
             .try_into()
-            .unwrap()
+            .unwrap(),
     )
 }
 
@@ -416,11 +463,16 @@ mod tests {
                 '0'..='9' => (ch as u8) - ('0' as u8),
                 'a'..='f' => 10 + (ch as u8) - ('a' as u8),
                 'A'..='F' => 10 + (ch as u8) - ('F' as u8),
-                _ => panic!("Unknown char: {}", ch)
+                _ => panic!("Unknown char: {}", ch),
             }
         }
 
-        let single_digits: [u8; 32] = s.chars().map(|ch| char_to_byte(ch)).collect::<Vec<u8>>().try_into().unwrap();
+        let single_digits: [u8; 32] = s
+            .chars()
+            .map(|ch| char_to_byte(ch))
+            .collect::<Vec<u8>>()
+            .try_into()
+            .unwrap();
         let mut bytes = [0u8; 16];
         for i in 0..16 {
             bytes[i] = (single_digits[2 * i] << 4) | single_digits[2 * i + 1];
@@ -434,7 +486,7 @@ mod tests {
             match n {
                 0..=9 => (('0' as u8) + n) as char,
                 10..=15 => (('a' as u8) + n - 10) as char,
-                _ => panic!("Invalid nibble for casting to char: {}", n)
+                _ => panic!("Invalid nibble for casting to char: {}", n),
             }
         }
 
@@ -447,7 +499,7 @@ mod tests {
                 .iter()
                 .map(|b| byte_to_chars(*b))
                 .flatten()
-                .collect::<Vec<char>>()
+                .collect::<Vec<char>>(),
         )
     }
 
@@ -475,10 +527,7 @@ mod tests {
         ];
 
         let expected: [u8; 16] = [
-            0x0, 0x4, 0x8, 0xc,
-            0x1, 0x5, 0x9, 0xd,
-            0x2, 0x6, 0xa, 0xe,
-            0x3, 0x7, 0xb, 0xf,
+            0x0, 0x4, 0x8, 0xc, 0x1, 0x5, 0x9, 0xd, 0x2, 0x6, 0xa, 0xe, 0x3, 0x7, 0xb, 0xf,
         ];
 
         assert_eq!(super::state_to_bytes(state), expected);
@@ -487,10 +536,7 @@ mod tests {
     #[test]
     fn state_from_bytes() {
         let bytes: [u8; 16] = [
-            0x0, 0x4, 0x8, 0xc,
-            0x1, 0x5, 0x9, 0xd,
-            0x2, 0x6, 0xa, 0xe,
-            0x3, 0x7, 0xb, 0xf,
+            0x0, 0x4, 0x8, 0xc, 0x1, 0x5, 0x9, 0xd, 0x2, 0x6, 0xa, 0xe, 0x3, 0x7, 0xb, 0xf,
         ];
 
         let expected: super::State = [
@@ -513,7 +559,10 @@ mod tests {
     #[test]
     fn substitution_table_inverts() {
         for v in 0..=255 {
-            assert_eq!(v, super::INVERSE_SUBSTITUTION_TABLE[super::SUBSTITUTION_TABLE[v as usize] as usize]);
+            assert_eq!(
+                v,
+                super::INVERSE_SUBSTITUTION_TABLE[super::SUBSTITUTION_TABLE[v as usize] as usize]
+            );
         }
     }
 
@@ -564,7 +613,10 @@ mod tests {
             utils::hex!("0c 0d 0e 0f"),
         ];
 
-        assert_eq!(super::inverse_substitute_bytes(super::substitute_bytes(state)), state);
+        assert_eq!(
+            super::inverse_substitute_bytes(super::substitute_bytes(state)),
+            state
+        );
     }
 
     // Shift rows
@@ -697,17 +749,20 @@ mod tests {
         // This case is from the NIST standardization document for AES at
         // https://tsapps.nist.gov/publication/get_pdf.cfm?pub_id=901427
         // in Appendix A.3.
-        let key: super::MainKey = utils::hex!("
+        let key: super::MainKey = utils::hex!(
+            "
             60 3d eb 10 15 ca 71 be 2b 73 ae f0 85 7d 77 81
             1f 35 2c 07 3b 61 08 d7 2d 98 10 a3 09 14 df f4
-        ");
+        "
+        );
 
-        let keys: [[u8; 4]; super::STATE_COLS * (super::NUM_ROUNDS + 1)] = super::key_expansion(&key);
+        let keys: [[u8; 4]; super::STATE_COLS * (super::NUM_ROUNDS + 1)] =
+            super::key_expansion(&key);
 
-        assert_eq!(keys[0], utils::hex!("60 3d eb 10"));   // Copied from the input key.
-        assert_eq!(keys[8], utils::hex!("9b a3 54 11"));   // First key part that's not copied from the input.
-        assert_eq!(keys[41], utils::hex!("6c cc 5a 71"));  // Some key part in the middle.
-        assert_eq!(keys[59], utils::hex!("70 6c 63 1e"));  // Last part of the last key.
+        assert_eq!(keys[0], utils::hex!("60 3d eb 10")); // Copied from the input key.
+        assert_eq!(keys[8], utils::hex!("9b a3 54 11")); // First key part that's not copied from the input.
+        assert_eq!(keys[41], utils::hex!("6c cc 5a 71")); // Some key part in the middle.
+        assert_eq!(keys[59], utils::hex!("70 6c 63 1e")); // Last part of the last key.
     }
 
     // Add round key
@@ -734,10 +789,12 @@ mod tests {
         // This case is from the NIST standardization document for AES at
         // https://tsapps.nist.gov/publication/get_pdf.cfm?pub_id=901427
         // in Appendix C.3, going from round 11 to round 12.
-        let key: super::MainKey = utils::hex!("
+        let key: super::MainKey = utils::hex!(
+            "
             00 01 02 03 04 05 06 07 08 09 0a 0b 0c 0d 0e 0f
             10 11 12 13 14 15 16 17 18 19 1a 1b 1c 1d 1e 1f
-        ");
+        "
+        );
 
         let round = 11;
         let round_key = super::get_round_keys(&key)[round];
@@ -754,10 +811,12 @@ mod tests {
         // https://tsapps.nist.gov/publication/get_pdf.cfm?pub_id=901427
         // in Appendix C.3.
         let data: super::Block = utils::hex!("00 11 22 33 44 55 66 77 88 99 aa bb cc dd ee ff");
-        let key: super::MainKey = utils::hex!("
+        let key: super::MainKey = utils::hex!(
+            "
             00 01 02 03 04 05 06 07 08 09 0a 0b 0c 0d 0e 0f
             10 11 12 13 14 15 16 17 18 19 1a 1b 1c 1d 1e 1f
-        ");
+        "
+        );
         let round_keys = super::get_round_keys(&key);
 
         let expected: super::Block = utils::hex!("8e a2 b7 ca 51 67 45 bf ea fc 49 90 4b 49 60 89");
@@ -770,10 +829,12 @@ mod tests {
     fn decrypt_block() {
         // This case is the decryption of the previous encryption test.
         let data: super::Block = utils::hex!("8e a2 b7 ca 51 67 45 bf ea fc 49 90 4b 49 60 89");
-        let key: super::MainKey = utils::hex!("
+        let key: super::MainKey = utils::hex!(
+            "
             00 01 02 03 04 05 06 07 08 09 0a 0b 0c 0d 0e 0f
             10 11 12 13 14 15 16 17 18 19 1a 1b 1c 1d 1e 1f
-        ");
+        "
+        );
         let round_keys = super::get_round_keys(&key);
 
         let expected: super::Block = utils::hex!("00 11 22 33 44 55 66 77 88 99 aa bb cc dd ee ff");
@@ -784,7 +845,10 @@ mod tests {
     #[test]
     fn encrypt_and_decrypt_block() {
         let original: [u8; super::BLOCK_SIZE] = "Oh hello, World!".as_bytes().try_into().unwrap();
-        let key: super::MainKey = "keep it secret, keep it safe....".as_bytes().try_into().unwrap();
+        let key: super::MainKey = "keep it secret, keep it safe...."
+            .as_bytes()
+            .try_into()
+            .unwrap();
         let round_keys = super::get_round_keys(&key);
 
         let encrypted = super::encrypt_block(original, &round_keys);
@@ -804,11 +868,16 @@ mod tests {
     #[test]
     fn encrypt_flush_block() {
         let bytes: [u8; super::BLOCK_SIZE] = "Oh hello, World!".as_bytes().try_into().unwrap();
-        let key: super::MainKey = "keep it secret, keep it safe....".as_bytes().try_into().unwrap();
-        let expected = utils::hex!("
+        let key: super::MainKey = "keep it secret, keep it safe...."
+            .as_bytes()
+            .try_into()
+            .unwrap();
+        let expected = utils::hex!(
+            "
             07 83 2F AE 09 F6 46 83 BE C7 55 6F 23 E8 48 8E
             C6 70 E4 9B 52 C7 DB 77 21 DA B7 A9 78 17 7C 81
-        ");
+        "
+        );
 
         assert_eq!(super::encrypt(&bytes, &key), expected);
     }
@@ -817,14 +886,21 @@ mod tests {
     fn encrypt_jagged_block() {
         let bytes: [u8; 3 * super::BLOCK_SIZE + 14] =
             "I do not like them Sam-I-Am. I do not like green eggs and ham."
-                .as_bytes().try_into().unwrap();
-        let key: super::MainKey = "keep it secret, keep it safe....".as_bytes().try_into().unwrap();
-        let expected = utils::hex!("
+                .as_bytes()
+                .try_into()
+                .unwrap();
+        let key: super::MainKey = "keep it secret, keep it safe...."
+            .as_bytes()
+            .try_into()
+            .unwrap();
+        let expected = utils::hex!(
+            "
             3D C3 76 57 A6 D1 FD E3 20 32 06 3A F4 66 9A B5
             F6 9D C8 1B DD 94 35 A3 7E C9 63 E3 E2 29 90 5B
             45 F5 AF 20 F7 86 00 72 EA 64 54 26 77 EE A7 29
             B7 43 DC 1C 19 0D 86 28 9F A1 B5 F2 94 74 EF B7
-        ");
+        "
+        );
 
         assert_eq!(super::encrypt(&bytes, &key), expected);
     }
@@ -833,11 +909,16 @@ mod tests {
     #[test]
     fn decrypt_flush_block() {
         // This case is the decryption of the previous encrypt_flush_block() test.
-        let bytes = utils::hex!("
+        let bytes = utils::hex!(
+            "
             07 83 2F AE 09 F6 46 83 BE C7 55 6F 23 E8 48 8E
             C6 70 E4 9B 52 C7 DB 77 21 DA B7 A9 78 17 7C 81
-        ");
-        let key: super::MainKey = "keep it secret, keep it safe....".as_bytes().try_into().unwrap();
+        "
+        );
+        let key: super::MainKey = "keep it secret, keep it safe...."
+            .as_bytes()
+            .try_into()
+            .unwrap();
         let expected: Vec<u8> = "Oh hello, World!".as_bytes().into();
 
         let decrypted_result = super::decrypt(&bytes, &key);
@@ -849,15 +930,21 @@ mod tests {
     #[test]
     fn decrypt_jagged_block() {
         // This case is the decryption of the previous encrypt_jagged_block() test.
-        let bytes = utils::hex!("
+        let bytes = utils::hex!(
+            "
             3D C3 76 57 A6 D1 FD E3 20 32 06 3A F4 66 9A B5
             F6 9D C8 1B DD 94 35 A3 7E C9 63 E3 E2 29 90 5B
             45 F5 AF 20 F7 86 00 72 EA 64 54 26 77 EE A7 29
             B7 43 DC 1C 19 0D 86 28 9F A1 B5 F2 94 74 EF B7
-        ");
-        let key: super::MainKey = "keep it secret, keep it safe....".as_bytes().try_into().unwrap();
+        "
+        );
+        let key: super::MainKey = "keep it secret, keep it safe...."
+            .as_bytes()
+            .try_into()
+            .unwrap();
         let expected: Vec<u8> = "I do not like them Sam-I-Am. I do not like green eggs and ham."
-            .as_bytes().into();
+            .as_bytes()
+            .into();
 
         let decrypted_result = super::decrypt(&bytes, &key);
         assert!(decrypted_result.is_ok());
@@ -867,11 +954,16 @@ mod tests {
 
     #[test]
     fn decrypt_invalid_number_of_bytes() {
-        let bytes = utils::hex!("
+        let bytes = utils::hex!(
+            "
             3D C3 76 57 A6 D1 FD E3 20 32 06 3A F4 66 9A B5
             F6 9D C8 1B DD
-        ");
-        let key: super::MainKey = "keep it secret, keep it safe....".as_bytes().try_into().unwrap();
+        "
+        );
+        let key: super::MainKey = "keep it secret, keep it safe...."
+            .as_bytes()
+            .try_into()
+            .unwrap();
 
         // The number of bytes must be a multiple of BLOCK_SIZE.
         assert!(super::decrypt(&bytes, &key).is_err());
@@ -880,7 +972,10 @@ mod tests {
     #[test]
     fn decrypt_zero_bytes() {
         let bytes: [u8; 0] = [];
-        let key: super::MainKey = "keep it secret, keep it safe....".as_bytes().try_into().unwrap();
+        let key: super::MainKey = "keep it secret, keep it safe...."
+            .as_bytes()
+            .try_into()
+            .unwrap();
 
         // The number of bytes must be non-zero.
         assert!(super::decrypt(&bytes, &key).is_err());
@@ -889,7 +984,10 @@ mod tests {
     #[test]
     fn encrypt_and_decrypt_flush_block() {
         let original: [u8; super::BLOCK_SIZE] = "Thing 1, Thing 2".as_bytes().try_into().unwrap();
-        let key: super::MainKey = "keep it secret, keep it safe....".as_bytes().try_into().unwrap();
+        let key: super::MainKey = "keep it secret, keep it safe...."
+            .as_bytes()
+            .try_into()
+            .unwrap();
 
         let encrypted = super::encrypt(&original, &key);
         let decrypted_result = super::decrypt(&encrypted, &key);
@@ -902,8 +1000,14 @@ mod tests {
     #[test]
     fn encrypt_and_decrypt_jagged_block() {
         let original: [u8; 3 * super::BLOCK_SIZE + 6] =
-            "Even if I wanted to go, my schedule wouldn't allow it!".as_bytes().try_into().unwrap();
-        let key: super::MainKey = "One fish, two fish, red fish ...".as_bytes().try_into().unwrap();
+            "Even if I wanted to go, my schedule wouldn't allow it!"
+                .as_bytes()
+                .try_into()
+                .unwrap();
+        let key: super::MainKey = "One fish, two fish, red fish ..."
+            .as_bytes()
+            .try_into()
+            .unwrap();
 
         let encrypted = super::encrypt(&original, &key);
         let decrypted_result = super::decrypt(&encrypted, &key);

@@ -55,6 +55,22 @@ impl Database {
         });
     }
 
+    pub fn remove(&mut self, id: usize) -> Result<(), String> {
+        let i = self.entries
+            .iter()
+            .enumerate()
+            .filter(|(i, entry)| entry.id == id)
+            .map(|(i, entry)| i)
+            .next()
+            .ok_or_else(|| format!("Invalid ID: {}", id))?;
+
+        // Remove the entry. Using `swap_remove()` is O(1) time but doesn't maintain
+        // sorting--the last element is moved to index `i`. But we don't need the
+        // vector to be sorted, so this is ok.
+        self.entries.swap_remove(i);
+        Ok(())
+    }
+
     pub fn write(&self, filename: &str) -> Result<(), String> {
         fs::write(
             filename,
@@ -387,5 +403,40 @@ mod tests {
 
         assert!(decrypted_database.is_ok());
         assert_eq!(decrypted_database.unwrap(), database);
+    }
+
+    #[test]
+    fn add_and_remove_entries() {
+        let mut database = super::Database::new(PASSWORD);
+        insert_entry!(database, 1); // Gets Id 1
+        insert_entry!(database, 2); // Gets Id 2
+
+        assert_eq!(database.entries.len(), 2);
+        database.remove(1);
+        assert_eq!(database.entries.len(), 1);
+        insert_entry!(database, 3); // Gets Id 1
+        assert_eq!(database.entries.len(), 2);
+    }
+
+    #[test]
+    fn remove_valid_entry() {
+        let mut database = super::Database::new(PASSWORD);
+        insert_entry!(database, 1); // Gets Id 1
+
+        assert_eq!(database.entries.len(), 1);
+        let r = database.remove(1);
+        assert!(r.is_ok());
+        assert_eq!(database.entries.len(), 0);
+    }
+
+    #[test]
+    fn remove_invalid_entry() {
+        let mut database = super::Database::new(PASSWORD);
+        insert_entry!(database, 1); // Gets Id 1
+
+        assert_eq!(database.entries.len(), 1);
+        let r = database.remove(42);
+        assert!(r.is_err());
+        assert_eq!(database.entries.len(), 1);
     }
 }

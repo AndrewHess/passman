@@ -56,7 +56,8 @@ impl Database {
     }
 
     pub fn remove(&mut self, id: usize) -> Result<(), String> {
-        let i = self.entries
+        let i = self
+            .entries
             .iter()
             .enumerate()
             .filter(|(i, entry)| entry.id == id)
@@ -69,6 +70,30 @@ impl Database {
         // vector to be sorted, so this is ok.
         self.entries.swap_remove(i);
         Ok(())
+    }
+
+    pub fn get_entry_long_form(&self, id: usize) -> Result<String, String> {
+        Ok(self.get_entry(id)?.long_form())
+    }
+
+    // Search the database for entries which have `s` as an exact substring of their
+    // username, website, or notes. Sort all of these entries by their ID (lower ID
+    // appearing sooner), and return a string where each line is the `short_form()`
+    // string for the corresponding entry.
+    pub fn find(&self, s: &str) -> String {
+        let mut matching_entries = self
+            .entries
+            .iter()
+            .filter(|e| e.username.contains(s) || e.website.contains(s) || e.notes.contains(s))
+            .collect::<Vec<&v1::Entry>>();
+
+        matching_entries.sort_by(|&e1, &e2| e1.id.cmp(&e2.id));
+
+        matching_entries
+            .iter()
+            .map(|e| e.short_form())
+            .collect::<Vec<String>>()
+            .join("\n")
     }
 
     pub fn write(&self, filename: &str) -> Result<(), String> {
@@ -135,6 +160,15 @@ impl Database {
             .next()
             .unwrap_or_else(|| self.entries.len())
     }
+
+    fn get_entry(&self, id: usize) -> Result<&v1::Entry, String> {
+        Ok(self
+            .entries
+            .iter()
+            .filter(|entry| entry.id == id)
+            .next()
+            .ok_or_else(|| format!("Invalid ID: {}", id))?)
+    }
 }
 
 fn salt_and_hash(password: &[u8], salt: &[u8]) -> [u8; 32] {
@@ -173,6 +207,7 @@ impl std::str::FromStr for FileFormatVersion {
 mod v1 {
     use super::{salt_and_hash, Database};
     use crate::{aes, utils};
+    use indoc;
     use serde;
 
     #[derive(Debug, std::cmp::PartialEq, serde::Serialize, serde::Deserialize)]
@@ -182,6 +217,30 @@ mod v1 {
         pub password_raw: String,
         pub website: String,
         pub notes: String,
+    }
+
+    impl Entry {
+        pub fn short_form(&self) -> String {
+            format!(
+                "{:3}. {} {} {}",
+                self.id,
+                utils::pad_or_ellipsis!(self.username, 20),
+                utils::pad_or_ellipsis!(self.website, 30),
+                utils::pad_or_ellipsis!(self.notes, 20)
+            )
+        }
+
+        pub fn long_form(&self) -> String {
+            format!(
+                indoc::indoc! {"
+                Username: {}
+                Password: {}
+                Website: {}
+                Notes: {}
+                "},
+                self.username, self.password_raw, self.website, self.notes
+            )
+        }
     }
 
     #[derive(serde::Serialize, serde::Deserialize)]
@@ -292,35 +351,60 @@ mod v1 {
 
 #[cfg(test)]
 mod tests {
+    use super::{v1, Database};
+    use indoc;
     use tempfile;
 
-    /////////////// CONSTANTS ///////////////
-    const PASSWORD: &str = "Let me in";
+    //////////////// PRELUDE ////////////////
+    struct Setup {
+        pub password: &'static str,
+        pub entry1: v1::Entry,
+        pub entry2: v1::Entry,
+        pub entry3: v1::Entry,
+    }
 
-    const E1_USERNAME: &str = "username";
-    const E1_PASSWORD: &str = "password";
-    const E1_WEBSITE: &str = "google.com";
-    const E1_NOTES: &str = "Nothing much";
+    impl Setup {
+        pub fn new() -> Self {
+            let password = "Let me in";
 
-    const E2_USERNAME: &str = "username2";
-    const E2_PASSWORD: &str = "let me in";
-    const E2_WEBSITE: &str = "amazon.com";
-    const E2_NOTES: &str = "";
+            let entry1 = v1::Entry {
+                id: 1, // When added to a database, the created Entry will likely have a different ID.
+                username: "username".to_string(),
+                password_raw: "password".to_string(),
+                website: "google.com".to_string(),
+                notes: "".to_string(),
+            };
+            let entry2 = v1::Entry {
+                id: 34, // When added to a database, the created Entry will likely have a different ID.
+                username: "janedoe".to_string(),
+                password_raw: "keep-it-secret-keep-it-safe".to_string(),
+                website: "https://www.github.com".to_string(),
+                notes: "It's for GitHub".to_string(),
+            };
+            let entry3 = v1::Entry {
+                id: 117, // When added to a database, the created Entry will likely have a different ID.
+                username: "williamthemagnificent".to_string(),
+                password_raw: "123".to_string(),
+                website: "https://www.world-of-engineering.com".to_string(),
+                notes: "This is for my beta website".to_string(),
+            };
 
-    const E3_USERNAME: &str = "username3";
-    const E3_PASSWORD: &str = "123";
-    const E3_WEBSITE: &str = "meta.com";
-    const E3_NOTES: &str = "";
-
-    macro_rules! insert_entry {
-        ($database:ident, $entry_ind:expr) => {
-            match $entry_ind {
-                1 => $database.add(E1_USERNAME, E1_PASSWORD, E1_WEBSITE, E1_NOTES),
-                2 => $database.add(E2_USERNAME, E2_PASSWORD, E2_WEBSITE, E2_NOTES),
-                3 => $database.add(E3_USERNAME, E3_PASSWORD, E3_WEBSITE, E3_NOTES),
-                x => panic!("Invalid entry index: {}", x),
+            Setup {
+                password: password,
+                entry1: entry1,
+                entry2: entry2,
+                entry3: entry3,
             }
-        };
+        }
+    }
+
+    fn insert_entry(database: &mut Database, entry: &v1::Entry) {
+        database.add(
+            &entry.username,
+            &entry.password_raw,
+            &entry.website,
+            &entry.notes,
+        );
     }
 
     macro_rules! random_filename {
@@ -339,6 +423,7 @@ mod tests {
     ///////////////// TESTS /////////////////
     #[test]
     fn salt_and_hash() {
+        let setup = Setup::new();
         let password = "Keep it secret".as_bytes();
         let salt1 = "Keep it safe".as_bytes();
         let salt2 = "salty".as_bytes();
@@ -353,43 +438,47 @@ mod tests {
 
     #[test]
     fn encryption_and_decryption_zero_entries() {
-        let database = super::Database::new(PASSWORD);
+        let setup = Setup::new();
+        let database = Database::new(setup.password);
         let encrypted = database.to_str().unwrap();
-        let decrypted_database = super::Database::from_str(&encrypted, PASSWORD).unwrap();
+        let decrypted_database = Database::from_str(&encrypted, setup.password).unwrap();
 
         assert_eq!(decrypted_database, database);
     }
 
     #[test]
     fn encryption_and_decryption_one_entry() {
-        let mut database = super::Database::new(PASSWORD);
-        insert_entry!(database, 1);
+        let setup = Setup::new();
+        let mut database = Database::new(setup.password);
+        insert_entry(&mut database, &setup.entry1);
 
         let encrypted = database.to_str().unwrap();
-        let decrypted_database = super::Database::from_str(&encrypted, PASSWORD).unwrap();
+        let decrypted_database = Database::from_str(&encrypted, setup.password).unwrap();
 
         assert_eq!(decrypted_database, database);
     }
 
     #[test]
     fn encryption_and_decryption_multiple_entries() {
-        let mut database = super::Database::new(PASSWORD);
-        insert_entry!(database, 1);
-        insert_entry!(database, 2);
-        insert_entry!(database, 3);
+        let setup = Setup::new();
+        let mut database = Database::new(setup.password);
+        insert_entry(&mut database, &setup.entry1);
+        insert_entry(&mut database, &setup.entry2);
+        insert_entry(&mut database, &setup.entry3);
 
         let encrypted = database.to_str().unwrap();
-        let decrypted_database = super::Database::from_str(&encrypted, PASSWORD).unwrap();
+        let decrypted_database = Database::from_str(&encrypted, setup.password).unwrap();
 
         assert_eq!(decrypted_database, database);
     }
 
     #[test]
     fn encrypt_and_decrypt_file() {
-        let mut database = super::Database::new(PASSWORD);
-        insert_entry!(database, 1);
-        insert_entry!(database, 2);
-        insert_entry!(database, 3);
+        let setup = Setup::new();
+        let mut database = Database::new(setup.password);
+        insert_entry(&mut database, &setup.entry1);
+        insert_entry(&mut database, &setup.entry2);
+        insert_entry(&mut database, &setup.entry3);
 
         let dir = tempfile::tempdir().unwrap();
         let filename = &dir
@@ -399,7 +488,7 @@ mod tests {
             .into_string()
             .unwrap();
         database.write(filename).unwrap();
-        let decrypted_database = super::Database::read(filename, PASSWORD);
+        let decrypted_database = Database::read(filename, setup.password);
 
         assert!(decrypted_database.is_ok());
         assert_eq!(decrypted_database.unwrap(), database);
@@ -407,21 +496,23 @@ mod tests {
 
     #[test]
     fn add_and_remove_entries() {
-        let mut database = super::Database::new(PASSWORD);
-        insert_entry!(database, 1); // Gets Id 1
-        insert_entry!(database, 2); // Gets Id 2
+        let setup = Setup::new();
+        let mut database = Database::new(setup.password);
+        insert_entry(&mut database, &setup.entry1); // Gets Id 1
+        insert_entry(&mut database, &setup.entry2); // Gets Id 2
 
         assert_eq!(database.entries.len(), 2);
         database.remove(1);
         assert_eq!(database.entries.len(), 1);
-        insert_entry!(database, 3); // Gets Id 1
+        insert_entry(&mut database, &setup.entry3); // Gets Id 1
         assert_eq!(database.entries.len(), 2);
     }
 
     #[test]
     fn remove_valid_entry() {
-        let mut database = super::Database::new(PASSWORD);
-        insert_entry!(database, 1); // Gets Id 1
+        let setup = Setup::new();
+        let mut database = Database::new(setup.password);
+        insert_entry(&mut database, &setup.entry1); // Gets Id 1
 
         assert_eq!(database.entries.len(), 1);
         let r = database.remove(1);
@@ -431,12 +522,119 @@ mod tests {
 
     #[test]
     fn remove_invalid_entry() {
-        let mut database = super::Database::new(PASSWORD);
-        insert_entry!(database, 1); // Gets Id 1
+        let setup = Setup::new();
+        let mut database = Database::new(setup.password);
+        insert_entry(&mut database, &setup.entry1); // Gets Id 1
 
         assert_eq!(database.entries.len(), 1);
         let r = database.remove(42);
         assert!(r.is_err());
         assert_eq!(database.entries.len(), 1);
+    }
+
+    #[test]
+    fn short_form() {
+        let setup = Setup::new();
+        let entry1_short =
+            "  1. username             google.com                                         ";
+        let entry2_short =
+            " 34. janedoe              https://www.github.com         It's for GitHub     ";
+        let entry3_short =
+            "117. williamthemagnifi... https://www.world-of-engine... This is for my be...";
+
+        assert_eq!(setup.entry1.short_form(), entry1_short);
+        assert_eq!(setup.entry2.short_form(), entry2_short);
+        assert_eq!(setup.entry3.short_form(), entry3_short);
+    }
+
+    #[test]
+    fn long_form() {
+        let setup = Setup::new();
+
+        let entry1_long = indoc::indoc! {"
+            Username: username
+            Password: password
+            Website: google.com
+            Notes:
+        "};
+        let entry2_long = indoc::indoc! {"
+            Username: janedoe
+            Password: keep-it-secret-keep-it-safe
+            Website: https://www.github.com
+            Notes: It's for GitHub
+        "};
+        let entry3_long = indoc::indoc! {"
+            Username: williamthemagnificent
+            Password: 123
+            Website: https://www.world-of-engineering.com
+            Notes: This is for my beta website
+        "};
+
+        // Allow for different leading or trailing whitespace, but everything
+        // else must be verbatim.
+        assert_eq!(setup.entry1.long_form().trim(), entry1_long.trim());
+        assert_eq!(setup.entry2.long_form().trim(), entry2_long.trim());
+        assert_eq!(setup.entry3.long_form().trim(), entry3_long.trim());
+    }
+
+    #[test]
+    fn get_entry_long_form() {
+        let setup = Setup::new();
+        let mut database = Database::new(&setup.password);
+        insert_entry(&mut database, &setup.entry2); // Gets ID 1.
+        let id = 1;
+
+        let computed = database.get_entry_long_form(id);
+        let expected = setup.entry2.long_form();
+
+        assert!(computed.is_ok());
+        assert_eq!(computed.unwrap(), expected);
+    }
+
+    #[test]
+    fn find_no_entries() {
+        let setup = Setup::new();
+        let mut database = Database::new(&setup.password);
+        insert_entry(&mut database, &setup.entry1); // Gets ID 1.
+        insert_entry(&mut database, &setup.entry2); // Gets ID 2.
+        insert_entry(&mut database, &setup.entry3); // Gets ID 3.
+
+        let computed = database.find("not-a-substring-of-any-entry");
+        let expected = "";
+
+        assert_eq!(computed, expected);
+    }
+
+    #[test]
+    fn find_one_entry() {
+        let setup = Setup::new();
+        let mut database = Database::new(&setup.password);
+        insert_entry(&mut database, &setup.entry1); // Gets ID 1.
+        insert_entry(&mut database, &setup.entry2); // Gets ID 2.
+        insert_entry(&mut database, &setup.entry3); // Gets ID 3.
+
+        let entry2 = v1::Entry{id: 2, ..setup.entry2};
+
+        let computed = database.find("doe");
+        let expected = entry2.short_form();
+
+        assert_eq!(computed, expected);
+    }
+
+    #[test]
+    fn find_multiple_entries() {
+        let setup = Setup::new();
+        let mut database = Database::new(&setup.password);
+        insert_entry(&mut database, &setup.entry1); // Gets ID 1.
+        insert_entry(&mut database, &setup.entry2); // Gets ID 2.
+        insert_entry(&mut database, &setup.entry3); // Gets ID 3.
+
+        let entry2 = v1::Entry{id: 2, ..setup.entry2};
+        let entry3 = v1::Entry{id: 3, ..setup.entry3};
+
+        let computed = database.find("https");
+        let expected = entry2.short_form() + "\n" + &entry3.short_form();
+
+        assert_eq!(computed, expected);
     }
 }

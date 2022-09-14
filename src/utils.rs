@@ -32,6 +32,19 @@ macro_rules! extract_all_bytes {
 }
 pub(crate) use extract_all_bytes;
 
+macro_rules! pad_or_ellipsis {
+    ($value:expr, $space_available:expr) => {{
+        let s = $value.to_string();
+        if s.len() <= $space_available {
+            format!("{:width$}", s, width = $space_available)
+        } else {
+            let amount_to_show = std::cmp::max(0, $space_available - 3i32) as usize;
+            format!("{}...", &s[..amount_to_show])
+        }
+    }};
+}
+pub(crate) use pad_or_ellipsis;
+
 // Convert byte array into a hex String with no spaces.
 // For example, [0x0a, 0xff, 0x30] -> "0aff30"
 pub fn bytes_to_hex(bytes: &[u8]) -> String {
@@ -92,5 +105,18 @@ mod tests {
             super::hex_to_bytes(&"004a0230ff".to_string())[..],
             [0x00, 0x4a, 0x02, 0x30, 0xff]
         );
+    }
+
+    #[test]
+    fn pad_or_truncate() {
+        assert_eq!(super::pad_or_ellipsis!("Hello", 10), "Hello     ");
+        assert_eq!(super::pad_or_ellipsis!("Hello, world!", 10), "Hello, ...");
+        assert_eq!(
+            super::pad_or_ellipsis!("Hello, world!", 13),
+            "Hello, world!"
+        );
+
+        // Test giving too little space.
+        assert_eq!(super::pad_or_ellipsis!("Hello", 2), "...");
     }
 }

@@ -60,8 +60,8 @@ impl Database {
             .entries
             .iter()
             .enumerate()
-            .filter(|(i, entry)| entry.id == id)
-            .map(|(i, entry)| i)
+            .filter(|(_, entry)| entry.id == id)
+            .map(|(i, _)| i)
             .next()
             .ok_or_else(|| format!("Invalid ID: {}", id))?;
 
@@ -94,6 +94,26 @@ impl Database {
             .map(|e| e.short_form())
             .collect::<Vec<String>>()
             .join("\n")
+    }
+
+    pub fn set_entry_username(&mut self, id: usize, new_username: &str) -> Result<(), String> {
+        self.get_entry_mut(id)?.username = new_username.to_string();
+        Ok(())
+    }
+
+    pub fn set_entry_password(&mut self, id: usize, new_password: &str) -> Result<(), String> {
+        self.get_entry_mut(id)?.password_raw = new_password.to_string();
+        Ok(())
+    }
+
+    pub fn set_entry_website(&mut self, id: usize, new_website: &str) -> Result<(), String> {
+        self.get_entry_mut(id)?.website = new_website.to_string();
+        Ok(())
+    }
+
+    pub fn set_entry_notes(&mut self, id: usize, new_notes: &str) -> Result<(), String> {
+        self.get_entry_mut(id)?.notes = new_notes.to_string();
+        Ok(())
     }
 
     pub fn write(&self, filename: &str) -> Result<(), String> {
@@ -156,7 +176,7 @@ impl Database {
             .into_iter()
             .enumerate()
             .filter(|(_, in_use)| !in_use)
-            .map(|(i, v)| i)
+            .map(|(i, _)| i)
             .next()
             .unwrap_or_else(|| self.entries.len())
     }
@@ -165,6 +185,15 @@ impl Database {
         Ok(self
             .entries
             .iter()
+            .filter(|entry| entry.id == id)
+            .next()
+            .ok_or_else(|| format!("Invalid ID: {}", id))?)
+    }
+
+    fn get_entry_mut(&mut self, id: usize) -> Result<&mut v1::Entry, String> {
+        Ok(self
+            .entries
+            .iter_mut()
             .filter(|entry| entry.id == id)
             .next()
             .ok_or_else(|| format!("Invalid ID: {}", id))?)
@@ -423,7 +452,6 @@ mod tests {
     ///////////////// TESTS /////////////////
     #[test]
     fn salt_and_hash() {
-        let setup = Setup::new();
         let password = "Keep it secret".as_bytes();
         let salt1 = "Keep it safe".as_bytes();
         let salt2 = "salty".as_bytes();
@@ -502,7 +530,8 @@ mod tests {
         insert_entry(&mut database, &setup.entry2); // Gets Id 2
 
         assert_eq!(database.entries.len(), 2);
-        database.remove(1);
+        let r = database.remove(1);
+        assert!(r.is_ok());
         assert_eq!(database.entries.len(), 1);
         insert_entry(&mut database, &setup.entry3); // Gets Id 1
         assert_eq!(database.entries.len(), 2);
@@ -613,7 +642,10 @@ mod tests {
         insert_entry(&mut database, &setup.entry2); // Gets ID 2.
         insert_entry(&mut database, &setup.entry3); // Gets ID 3.
 
-        let entry2 = v1::Entry{id: 2, ..setup.entry2};
+        let entry2 = v1::Entry {
+            id: 2,
+            ..setup.entry2
+        };
 
         let computed = database.find("doe");
         let expected = entry2.short_form();
@@ -629,12 +661,154 @@ mod tests {
         insert_entry(&mut database, &setup.entry2); // Gets ID 2.
         insert_entry(&mut database, &setup.entry3); // Gets ID 3.
 
-        let entry2 = v1::Entry{id: 2, ..setup.entry2};
-        let entry3 = v1::Entry{id: 3, ..setup.entry3};
+        let entry2 = v1::Entry {
+            id: 2,
+            ..setup.entry2
+        };
+        let entry3 = v1::Entry {
+            id: 3,
+            ..setup.entry3
+        };
 
         let computed = database.find("https");
         let expected = entry2.short_form() + "\n" + &entry3.short_form();
 
         assert_eq!(computed, expected);
+    }
+
+    #[test]
+    fn set_username_valid_entry() {
+        let setup = Setup::new();
+        let mut database = Database::new(&setup.password);
+        insert_entry(&mut database, &setup.entry1); // Gets ID 1.
+
+        let id = 1;
+        let new_username = "inigomontoya";
+
+        let entry = database.get_entry(id);
+        assert!(entry.is_ok());
+        assert_ne!(entry.unwrap().username, new_username);
+
+        let r = database.set_entry_username(id, new_username);
+        assert!(r.is_ok());
+
+        let entry = database.get_entry(id);
+        assert!(entry.is_ok());
+        assert_eq!(entry.unwrap().username, new_username);
+    }
+
+    #[test]
+    fn set_username_invalid_entry() {
+        let setup = Setup::new();
+        let mut database = Database::new(&setup.password);
+        insert_entry(&mut database, &setup.entry1); // Gets ID 1.
+
+        let id = 35; // No entry in the database has this ID.
+        let new_username = "inigomontoya";
+
+        let r = database.set_entry_username(id, new_username);
+        assert!(r.is_err());
+    }
+
+    #[test]
+    fn set_password_valid_entry() {
+        let setup = Setup::new();
+        let mut database = Database::new(&setup.password);
+        insert_entry(&mut database, &setup.entry1); // Gets ID 1.
+
+        let id = 1;
+        let new_password = "youkilledmyfather";
+
+        let entry = database.get_entry(id);
+        assert!(entry.is_ok());
+        assert_ne!(entry.unwrap().password_raw, new_password);
+
+        let r = database.set_entry_password(id, new_password);
+        assert!(r.is_ok());
+
+        let entry = database.get_entry(id);
+        assert!(entry.is_ok());
+        assert_eq!(entry.unwrap().password_raw, new_password);
+    }
+
+    #[test]
+    fn set_password_invalid_entry() {
+        let setup = Setup::new();
+        let mut database = Database::new(&setup.password);
+        insert_entry(&mut database, &setup.entry1); // Gets ID 1.
+
+        let id = 35; // No entry in the database has this ID.
+        let new_password = "youkilledmyfather";
+
+        let r = database.set_entry_password(id, new_password);
+        assert!(r.is_err());
+    }
+
+    #[test]
+    fn set_website_valid_entry() {
+        let setup = Setup::new();
+        let mut database = Database::new(&setup.password);
+        insert_entry(&mut database, &setup.entry1); // Gets ID 1.
+
+        let id = 1;
+        let new_website = "preparetodie.com";
+
+        let entry = database.get_entry(id);
+        assert!(entry.is_ok());
+        assert_ne!(entry.unwrap().website, new_website);
+
+        let r = database.set_entry_website(id, new_website);
+        assert!(r.is_ok());
+
+        let entry = database.get_entry(id);
+        assert!(entry.is_ok());
+        assert_eq!(entry.unwrap().website, new_website);
+    }
+
+    #[test]
+    fn set_website_invalid_entry() {
+        let setup = Setup::new();
+        let mut database = Database::new(&setup.password);
+        insert_entry(&mut database, &setup.entry1); // Gets ID 1.
+
+        let id = 35; // No entry in the database has this ID.
+        let new_website = "preparetodie.com";
+
+        let r = database.set_entry_website(id, new_website);
+        assert!(r.is_err());
+    }
+
+    #[test]
+    fn set_notes_valid_entry() {
+        let setup = Setup::new();
+        let mut database = Database::new(&setup.password);
+        insert_entry(&mut database, &setup.entry1); // Gets ID 1.
+
+        let id = 1;
+        let new_notes = "*Repeats endlessly*";
+
+        let entry = database.get_entry(id);
+        assert!(entry.is_ok());
+        assert_ne!(entry.unwrap().notes, new_notes);
+
+        let r = database.set_entry_notes(id, new_notes);
+        assert!(r.is_ok());
+
+        let entry = database.get_entry(id);
+        assert!(entry.is_ok());
+        assert_eq!(entry.unwrap().notes, new_notes);
+    }
+
+    #[test]
+    fn set_notes_invalid_entry() {
+        let setup = Setup::new();
+        let mut database = Database::new(&setup.password);
+        insert_entry(&mut database, &setup.entry1); // Gets ID 1.
+
+        let id = 35; // No entry in the database has this ID.
+        let new_notes = "*Repeats endlessly*";
+
+        let r = database.set_entry_notes(id, new_notes);
+        assert!(r.is_err());
     }
 }

@@ -127,6 +127,34 @@ impl Database {
         Ok(())
     }
 
+    // Changes the password used to encrypt the database.
+    // This only succeeds if `old_password` is the current password.
+    pub fn change_password(
+        &mut self,
+        old_password: &str,
+        new_password: &str,
+    ) -> Result<(), String> {
+        // Check that `old_password` is the current password.
+        let hash = salt_and_hash(old_password.as_bytes(), &self.password_verifying_hash_salt);
+        if hash != self.password_verifying_hash {
+            return Err("Invalid password".to_string());
+        }
+
+        // The main encryption key stays the same, but needs to be encrypted
+        // with the new intermediate passkey.
+        let intermediate_encryption_key: aes::MainKey =
+            salt_and_hash(new_password.as_bytes(), &self.intermediate_passkey_salt);
+        self.main_passkey_encrypted = utils::bytes_to_hex(
+            &aes::encrypt(&self.encryption_key, &intermediate_encryption_key)[..],
+        );
+
+        // Update the password-varifying hash.
+        self.password_verifying_hash =
+            salt_and_hash(new_password.as_bytes(), &self.password_verifying_hash_salt);
+
+        Ok(())
+    }
+
     pub fn read(filename: &str, password: &str) -> Result<Database, String> {
         if !std::path::Path::new(filename).exists() {
             return Err(format!("File {} does not exist", filename));
@@ -809,6 +837,142 @@ mod tests {
         let new_notes = "*Repeats endlessly*";
 
         let r = database.set_entry_notes(id, new_notes);
+        assert!(r.is_err());
+    }
+
+    #[test]
+    fn change_password_invalid_old_password() {
+        let setup = Setup::new();
+        let mut database = Database::new(&setup.password);
+        insert_entry(&mut database, &setup.entry1); // Gets ID 1.
+        insert_entry(&mut database, &setup.entry2); // Gets ID 2.
+        insert_entry(&mut database, &setup.entry3); // Gets ID 3.
+
+        let entry1 = v1::Entry {
+            id: 1,
+            ..setup.entry1
+        };
+        let entry2 = v1::Entry {
+            id: 2,
+            ..setup.entry2
+        };
+        let entry3 = v1::Entry {
+            id: 3,
+            ..setup.entry3
+        };
+
+        assert_eq!(database.entries[0], entry1);
+        assert_eq!(database.entries[1], entry2);
+        assert_eq!(database.entries[2], entry3);
+
+        let invalid_old_password = "this is not my password";
+        let new_password = "correct-horse-battery-staple";
+        let r = database.change_password(invalid_old_password, new_password);
+        assert!(r.is_err());
+
+        // Write and then read the database to force encryption and decryption.
+        // This should be using the old password (because changing the password
+        // failed).
+        let dir = tempfile::tempdir().unwrap();
+        let filename = &dir
+            .path()
+            .join(random_filename!("test-file-", 16))
+            .into_os_string()
+            .into_string()
+            .unwrap();
+        database.write(filename).unwrap();
+
+        // Trying to decrypt with the `invalid_old_password` or with
+        // `new_password` should fail.
+        let r = Database::read(filename, invalid_old_password);
+        assert!(r.is_err());
+        let r = Database::read(filename, new_password);
+        assert!(r.is_err());
+
+        // Decrypting with the actual old password should succeed.
+        let r = Database::read(filename, &setup.password);
+        assert!(r.is_ok());
+        let decrypted_database = r.unwrap();
+
+        assert_eq!(decrypted_database.entries[0], entry1);
+        assert_eq!(decrypted_database.entries[1], entry2);
+        assert_eq!(decrypted_database.entries[2], entry3);
+    }
+
+    #[test]
+    fn change_password_valid_old_password() {
+        let setup = Setup::new();
+        let mut database = Database::new(&setup.password);
+        insert_entry(&mut database, &setup.entry1); // Gets ID 1.
+        insert_entry(&mut database, &setup.entry2); // Gets ID 2.
+        insert_entry(&mut database, &setup.entry3); // Gets ID 3.
+
+        let entry1 = v1::Entry {
+            id: 1,
+            ..setup.entry1
+        };
+        let entry2 = v1::Entry {
+            id: 2,
+            ..setup.entry2
+        };
+        let entry3 = v1::Entry {
+            id: 3,
+            ..setup.entry3
+        };
+
+        assert_eq!(database.entries[0], entry1);
+        assert_eq!(database.entries[1], entry2);
+        assert_eq!(database.entries[2], entry3);
+
+        let new_password = "correct-horse-battery-staple";
+        let r = database.change_password(&setup.password, new_password);
+        assert!(r.is_ok());
+
+        // Write and then read the database to force encryption and
+        // decryption with the new password.
+        let dir = tempfile::tempdir().unwrap();
+        let filename = &dir
+            .path()
+            .join(random_filename!("test-file-", 16))
+            .into_os_string()
+            .into_string()
+            .unwrap();
+        database.write(filename).unwrap();
+        let r = Database::read(filename, new_password);
+        assert!(r.is_ok());
+        let decrypted_database = r.unwrap();
+
+        assert_eq!(decrypted_database.entries[0], entry1);
+        assert_eq!(decrypted_database.entries[1], entry2);
+        assert_eq!(decrypted_database.entries[2], entry3);
+    }
+
+    #[test]
+    fn change_password_then_old_password_doesnt_work() {
+        let setup = Setup::new();
+        let mut database = Database::new(&setup.password);
+        insert_entry(&mut database, &setup.entry1); // Gets ID 1.
+        insert_entry(&mut database, &setup.entry2); // Gets ID 2.
+        insert_entry(&mut database, &setup.entry3); // Gets ID 3.
+
+        let new_password = "correct-horse-battery-staple";
+        let r = database.change_password(&setup.password, new_password);
+        assert!(r.is_ok());
+
+        // Write and then read the database to force encryption and
+        // decryption with the new password.
+        let dir = tempfile::tempdir().unwrap();
+        let filename = &dir
+            .path()
+            .join(random_filename!("test-file-", 16))
+            .into_os_string()
+            .into_string()
+            .unwrap();
+        database.write(filename).unwrap();
+
+        // Try to decrypt the database using the old password, which should not
+        // work anymore.
+        let r = Database::read(filename, &setup.password);
         assert!(r.is_err());
     }
 }

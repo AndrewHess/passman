@@ -1,7 +1,8 @@
 mod aes;
 mod database;
+mod user_interface;
 mod utils;
 
 fn main() {
-    println!("I don't do anything yet");
+    user_interface::start();
 }

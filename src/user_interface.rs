@@ -2,65 +2,38 @@ use crate::database::Database;
 use dirs;
 use indoc;
 use std::io::{self, BufRead, Write};
-use std::path::Path;
 
 // All data written to disk is in this file in the user's home directory.
 const FILENAME: &str = ".passman";
 const MAX_LOGGIN_ATTEMPTS: u8 = 3;
 
-#[derive(Debug, PartialEq)]
-enum State {
-    CheckingForAccount,
-    CreatingPassword,
-    LoggingIn(String),
-    LoggedIn(Database),
-    Exiting,
-}
-
 pub fn start() {
     println!("Welcome to Passman");
-    println!("Enter the word help for available commands");
 
-    let state = check_for_account();
-    let state = match state {
-        State::CreatingPassword => create_password(),
-        State::LoggingIn(path_to_database) => login(&path_to_database),
-        State::Exiting => return,
-        _ => panic!("Unexpected state after check_for_account(): {:?}", state),
+    let mut path = dirs::home_dir().expect("Error: Unable to access home directory");
+    path.push(FILENAME);
+    let path = path.as_path();
+
+    let path_string = path
+        .to_str()
+        .expect("Internal error constructing filename.")
+        .to_string();
+
+    // Check whether an account already exists.
+    let database = match path.exists() {
+        false => create_password(),
+        true => login(&path_string),
     };
 
-    match state {
-        State::LoggedIn(mut database) => main_loop(&mut database),
-        State::Exiting => (),
-        unexpected => println!("Unexpected state: {:?}", unexpected),
+    if let Some(mut database) = database {
+        println!("Enter a command, or the word help for available commands.");
+        main_loop(&mut database);
+        save(&database, &path_string);
     }
 }
 
-// Searches for FILENAME. If it finds it, the user has an account and should enter
-// their password. If the file does not exist, the user should create an account.
-fn check_for_account() -> State {
-    let mut path_buf = match dirs::home_dir() {
-        Some(dir) => dir,
-        None => {
-            println!("Error: unable to access home directory");
-            return State::Exiting;
-        }
-    };
-
-    path_buf.push(FILENAME);
-    let path = path_buf.as_path();
-
-    return match path.exists() {
-        true => State::LoggingIn(
-            path.to_str()
-                .expect("Internal error constructing filename.")
-                .to_string(),
-        ),
-        false => State::CreatingPassword,
-    };
-}
-
-fn create_password() -> State {
+// Return the new database if a password is created, or None if no password was created.
+fn create_password() -> Option<Database> {
     println!(indoc::indoc! {"
         Looks like this is your first time using Passman for this computer user. You need to \
         create a password to secure your login credentials.
@@ -97,27 +70,26 @@ fn create_password() -> State {
         }
     }
 
-    State::LoggedIn(Database::new(&password))
+    println!("Password created.");
+    Some(Database::new(&password))
 }
 
-fn login(path_to_database: &str) -> State {
-    let password_prompt = "Enter your password: ";
-    for i in 0..MAX_LOGGIN_ATTEMPTS {
-        print_and_flush(password_prompt);
-        let password: String = read_trimmed_line()
-            .strip_prefix(&password_prompt)
-            .expect("Internal error reading password")
-            .to_string();
-
-        println!("password: {}", password);
-        match Database::read(path_to_database, &password) {
-            Ok(database) => return State::LoggedIn(database),
-            Err(y) => println!("Invalid password."),
+// Return the saved database if login succeeds, otherwise None.
+fn login(path_of_database: &str) -> Option<Database> {
+    for _ in 0..MAX_LOGGIN_ATTEMPTS {
+        print_and_flush("Enter your password: ");
+        let password = read_trimmed_line();
+        match Database::read(path_of_database, &password) {
+            Ok(database) => {
+                println!("Login successful.");
+                return Some(database);
+            }
+            Err(y) => println!("Failed to open database: {}", y),
         }
     }
 
     println!("Too many failed attempts.");
-    State::Exiting
+    None
 }
 
 fn main_loop(database: &mut Database) {
@@ -127,6 +99,12 @@ fn main_loop(database: &mut Database) {
         prompt_for_input();
         process_command(database, &read_trimmed_line(), &mut is_quitting);
     }
+}
+
+fn save(database: &Database, filename: &str) {
+    database
+        .write(filename)
+        .unwrap_or_else(|err| println!("Error saving data: {}", err))
 }
 
 fn prompt_for_input() {

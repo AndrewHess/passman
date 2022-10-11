@@ -127,12 +127,73 @@ fn process_command(database: &mut Database, cmd: &str, is_quitting: &mut bool) {
     match cmd {
         "help" => {
             println!("help: Displays available commands");
+            println!("add: Add a password to the database");
             println!("quit: Quits the program");
         }
+        "add" => add_entry(database),
         "quit" => {
             println!("Bye!");
             *is_quitting = true;
         }
         _ => println!("Invalid command. Try again."),
     }
+}
+
+fn add_entry(database: &mut Database) {
+    println!(indoc::indoc! {"\
+        Enter the credentials you want to store. The password must not be left empty, but you \
+        can skip all but one of the other fields."
+    });
+
+    let final_password: String;
+    loop {
+        print_and_flush("Password: ");
+        let password = read_trimmed_line();
+
+        if password.is_empty() {
+            println!("Your password must not be empty");
+            continue;
+        }
+
+        // Ensure no leading or trailing whitespace. This would make it difficult to see what the
+        // password is when it's printed.
+        if password.len() != password.trim().len() {
+            println!(
+                "Your password must not have leading or trailing whitespace (spaces, tabs, etc.)"
+            );
+            continue;
+        }
+
+        // This is a valid password.
+        final_password = password.to_string();
+        break;
+    }
+
+    let final_username: String;
+    let final_url: String;
+    let final_notes: String;
+    loop {
+        print_and_flush("Username: ");
+        let username = read_trimmed_line();
+
+        print_and_flush("URL: ");
+        let url = read_trimmed_line();
+
+        print_and_flush("Notes: ");
+        let notes = read_trimmed_line();
+
+        if username.is_empty() && url.is_empty() && notes.is_empty() {
+            println!("You must add a username, URL, and/or notes");
+            continue;
+        }
+
+        // These entries are valid.
+        final_username = username;
+        final_url = url;
+        final_notes = notes;
+        break;
+    }
+
+    database.add(&final_username, &final_password, &final_url, &final_notes);
+    println!("Entry added.");
 }

@@ -128,9 +128,11 @@ fn process_command(database: &mut Database, cmd: &str, is_quitting: &mut bool) {
         "help" => {
             println!("help: Displays available commands");
             println!("add: Add a password to the database");
+            println!("list: Display a preview of all entries");
             println!("quit: Quits the program");
         }
         "add" => add_entry(database),
+        "list" => println!("{}", database.find("")),
         "quit" => {
             println!("Bye!");
             *is_quitting = true;

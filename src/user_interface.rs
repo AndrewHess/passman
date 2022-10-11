@@ -124,14 +124,21 @@ fn read_trimmed_line() -> String {
 }
 
 fn process_command(database: &mut Database, cmd: &str, is_quitting: &mut bool) {
-    match cmd {
+    let (cmd_first, cmd_rest) = match cmd.find(char::is_whitespace) {
+        None => (cmd, ""),
+        Some(x) => (&cmd[..x], &cmd[(x + 1)..]),
+    };
+
+    match cmd_first {
         "help" => {
             println!("help: Displays available commands");
             println!("add: Add a password to the database");
+            println!("find <text>: Display a preview of all entries containing <text>");
             println!("list: Display a preview of all entries");
             println!("quit: Quits the program");
         }
         "add" => add_entry(database),
+        "find" => println!("{}", database.find(cmd_rest)),
         "list" => println!("{}", database.find("")),
         "quit" => {
             println!("Bye!");

@@ -131,17 +131,96 @@ fn process_command(database: &mut Database, cmd: &str, is_quitting: &mut bool) {
 
     // The argument won't always be an ID, but it will be for several cases.
     let id = cmd_rest.parse::<usize>();
+    let bad_id_msg = format!(
+        "'{}' is not an integer. Make sure to not include a decimal.",
+        cmd_rest
+    );
+    let print_long_form = || {
+        // Return true iff the id is valid.
+        match id {
+            Ok(id) => match database.get_entry_long_form(id) {
+                Ok(s) => {
+                    println!("{}", s);
+                    return true;
+                }
+                Err(_) => {
+                    println!("Invalid ID");
+                    return false;
+                }
+            },
+            Err(_) => {
+                println!("{}", bad_id_msg);
+                return false;
+            }
+        }
+    };
 
     match cmd_first {
         "help" => {
             println!("help: Displays available commands");
             println!("add: Add a password to the database");
+            println!("edit-notes <id>: Edit the notes for the specified entry");
+            println!("edit-password <id>: Edit the password for the specified entry");
+            println!("edit-url <id>: Edit the URL for the specified entry");
+            println!("edit-username <id>: Edit the username for the specified entry");
             println!("find <text>: Display a preview of all entries containing <text>");
             println!("list: Display a preview of all entries");
             println!("show <id>: Display all details of the specified entry");
             println!("quit: Quits the program");
         }
         "add" => add_entry(database),
+        "edit-notes" => {
+            let id_is_usize = print_long_form();
+
+            if id_is_usize {
+                print_and_flush("New notes: ");
+                let notes = read_trimmed_line();
+                let r = database.set_entry_notes(id.unwrap(), &notes);
+
+                if r.is_err() {
+                    println!("Error changing the notes");
+                }
+            }
+        }
+        "edit-password" => {
+            let id_is_usize = print_long_form();
+
+            if id_is_usize {
+                print_and_flush("New password: ");
+                let password = read_trimmed_line();
+                let r = database.set_entry_password(id.unwrap(), &password);
+
+                if r.is_err() {
+                    println!("Error changing the password");
+                }
+            }
+        }
+        "edit-url" => {
+            let id_is_usize = print_long_form();
+
+            if id_is_usize {
+                print_and_flush("New url: ");
+                let url = read_trimmed_line();
+                let r = database.set_entry_website(id.unwrap(), &url);
+
+                if r.is_err() {
+                    println!("Error changing the url");
+                }
+            }
+        }
+        "edit-username" => {
+            let id_is_usize = print_long_form();
+
+            if id_is_usize {
+                print_and_flush("New username: ");
+                let username = read_trimmed_line();
+                let r = database.set_entry_username(id.unwrap(), &username);
+
+                if r.is_err() {
+                    println!("Error changing the username");
+                }
+            }
+        }
         "find" => println!("{}", database.find(cmd_rest)),
         "list" => println!("{}", database.find("")),
         "show" => {
@@ -149,10 +228,7 @@ fn process_command(database: &mut Database, cmd: &str, is_quitting: &mut bool) {
                 Ok(id) => database
                     .get_entry_long_form(id)
                     .unwrap_or_else(|_| "Invaid ID".to_string()),
-                Err(_) => format!(
-                    "'{}' is not an integer. Make sure to not include a decimal.",
-                    cmd_rest
-                ),
+                Err(_) => bad_id_msg,
             };
             print!("{}", s);
         }

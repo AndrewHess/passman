@@ -129,17 +129,33 @@ fn process_command(database: &mut Database, cmd: &str, is_quitting: &mut bool) {
         Some(x) => (&cmd[..x], &cmd[(x + 1)..]),
     };
 
+    // The argument won't always be an ID, but it will be for several cases.
+    let id = cmd_rest.parse::<usize>();
+
     match cmd_first {
         "help" => {
             println!("help: Displays available commands");
             println!("add: Add a password to the database");
             println!("find <text>: Display a preview of all entries containing <text>");
             println!("list: Display a preview of all entries");
+            println!("show <id>: Display all details of the specified entry");
             println!("quit: Quits the program");
         }
         "add" => add_entry(database),
         "find" => println!("{}", database.find(cmd_rest)),
         "list" => println!("{}", database.find("")),
+        "show" => {
+            let s = match id {
+                Ok(id) => database
+                    .get_entry_long_form(id)
+                    .unwrap_or_else(|_| "Invaid ID".to_string()),
+                Err(_) => format!(
+                    "'{}' is not an integer. Make sure to not include a decimal.",
+                    cmd_rest
+                ),
+            };
+            print!("{}", s);
+        }
         "quit" => {
             println!("Bye!");
             *is_quitting = true;

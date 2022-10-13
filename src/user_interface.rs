@@ -159,6 +159,7 @@ fn process_command(database: &mut Database, cmd: &str, is_quitting: &mut bool) {
         "help" => {
             println!("help: Displays available commands");
             println!("add: Add a password to the database");
+            println!("delete <id>: Delete the specified entry");
             println!("edit-notes <id>: Edit the notes for the specified entry");
             println!("edit-password <id>: Edit the password for the specified entry");
             println!("edit-url <id>: Edit the URL for the specified entry");
@@ -169,6 +170,25 @@ fn process_command(database: &mut Database, cmd: &str, is_quitting: &mut bool) {
             println!("quit: Quits the program");
         }
         "add" => add_entry(database),
+        "delete" => {
+            let id_is_usize = print_long_form();
+
+            if id_is_usize {
+                print_and_flush("Enter \"delete\" without quotes to delete this entry: ");
+                let should_delete = read_trimmed_line() == "delete";
+
+                if should_delete {
+                    let r = database.remove(id.unwrap());
+                    if r.is_ok() {
+                        println!("Entry deleted.");
+                    } else {
+                        println!("Error deleting entry.");
+                    }
+                } else {
+                    println!("Not deleting entry.");
+                }
+            }
+        }
         "edit-notes" => {
             let id_is_usize = print_long_form();
 

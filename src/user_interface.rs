@@ -46,29 +46,10 @@ fn create_password() -> Option<Database> {
         The password you create must be at least 16 characters long. Enter it below."
     });
 
-    let password;
-    loop {
-        prompt_for_input();
-        let mut potential_password = read_trimmed_line();
-        println!("password: '{}'", potential_password); // todo deleteme
-
-        while potential_password.len() < 16 {
-            println!("Your password must be at least 16 characters long. Enter it below.");
-            prompt_for_input();
-            potential_password = read_trimmed_line();
-        }
-
-        println!("Re-enter your password.");
-        prompt_for_input();
-        let password_again = read_trimmed_line();
-
-        if potential_password == password_again {
-            password = potential_password;
-            break;
-        } else {
-            println!("Those passwords do not match. Create your password.");
-        }
-    }
+    let password = match get_new_password_from_user(None) {
+        Some(p) => p,
+        None => return None,
+    };
 
     println!("Password created.");
     Some(Database::new(&password))
@@ -159,6 +140,7 @@ fn process_command(database: &mut Database, cmd: &str, is_quitting: &mut bool) {
         "help" => {
             println!("help: Displays available commands");
             println!("add: Add a password to the database");
+            println!("change-password: Change your Passman password");
             println!("delete <id>: Delete the specified entry");
             println!("edit-notes <id>: Edit the notes for the specified entry");
             println!("edit-password <id>: Edit the password for the specified entry");
@@ -170,6 +152,24 @@ fn process_command(database: &mut Database, cmd: &str, is_quitting: &mut bool) {
             println!("quit: Quits the program");
         }
         "add" => add_entry(database),
+        "change-password" => {
+            print_and_flush("Enter your current password: ");
+            let current_password = read_trimmed_line();
+
+            let num_tries = Some(3);
+            let new_password = match get_new_password_from_user(num_tries) {
+                Some(s) => s,
+                None => {
+                    println!("Aborting.");
+                    return;
+                }
+            };
+
+            match database.change_password(&current_password, &new_password) {
+                Ok(()) => println!("Password updated."),
+                Err(y) => println!("Failed to update password: {}", y),
+            }
+        }
         "delete" => {
             let id_is_usize = print_long_form();
 
@@ -317,4 +317,34 @@ fn add_entry(database: &mut Database) {
 
     database.add(&final_username, &final_password, &final_url, &final_notes);
     println!("Entry added.");
+}
+
+fn get_new_password_from_user(max_tries: Option<u32>) -> Option<String> {
+    let mut i = 0;
+    let condition = |i| match max_tries {
+        Some(x) => (i < x),
+        None => true,
+    };
+
+    while condition(i) {
+        i += 1;
+        print_and_flush("New password: ");
+        let potential_password = read_trimmed_line();
+
+        if potential_password.len() < 16 {
+            println!("Your password must be at least 16 characters long.");
+            continue;
+        }
+
+        print_and_flush("Re-enter your new password: ");
+        let password_again = read_trimmed_line();
+
+        if potential_password == password_again {
+            return Some(potential_password);
+        } else {
+            println!("Those passwords do not match.");
+        }
+    }
+
+    None
 }
